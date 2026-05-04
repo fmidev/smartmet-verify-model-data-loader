@@ -13,7 +13,9 @@ def parse_command_line():
 
     parser.add_argument("-v", '--verbose', help="verbose output", action='store_true')
     parser.add_argument("--dry-run", help="make no changes anywhere", action='store_true')
-    parser.add_argument("-q", '--server', help="Retrieve data from http://SERVER/. Default is smartmet.fmi.fi", default="smartmet.fmi.fi")
+    parser.add_argument("-q", '--server', help="Retrieve data from http://SERVER/", required=True)
+    parser.add_argument("--timestep", '-t', help="Timestep for timeseries query (default: 'data')", default="data")
+    parser.add_argument("--proxy", help="HTTP(S) proxy URL. Can also be set via HTTP_PROXY/HTTPS_PROXY env vars")
     requiredOpts = parser.add_argument_group('Required arguments')
 
     requiredOpts.add_argument("--parameters",'-p', help="select parameter(s), comma separated list (newbase name)", required=True)
@@ -107,17 +109,14 @@ GROUP BY 1,2,3,4"""
 
 def read_from_smartmet_server(args, stations, params):
 
-    proxies = {
-        'http' : 'http://wwwcache.fmi.fi:8080',
-        'https' : 'http://wwwcache.fmi.fi:8080'
-    }
+    proxies = None
+    if args.proxy:
+        proxies = {
+            'http' : args.proxy,
+            'https' : args.proxy
+        }
 
-    step = "data";
-
-    if args.smartmet_producer == "harmonie_skandinavia_pinta":
-        step = "60"
-
-    BASE = "http://%s/timeseries?format=json&timeformat=timestamp&precision=double&tz=utc&starttime=data&endtime=data&timestep=%s&who=smartmet-verif" % (args.server, step)
+    BASE = "http://%s/timeseries?format=json&timeformat=timestamp&precision=double&tz=utc&starttime=data&endtime=data&timestep=%s&who=smartmet-verif" % (args.server, args.timestep)
 
     ret = {}
 
@@ -130,11 +129,10 @@ def read_from_smartmet_server(args, stations, params):
         if args.dry_run:
             print("Used url: %s" % (url))
 
-        if args.server == "smartmet.fmi.fi":
+        if proxies:
             r = requests.get(url, proxies=proxies)
         else:
             r = requests.get(url)
-
 
         if r.status_code != requests.codes.ok:
             print("Failed to read data from smartmet server for station %s: got http error code %s" % (station[0], r.status_code))
