@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src \
+    TZ=UTC
 
 RUN useradd -r -u 1000 appuser
 USER appuser
