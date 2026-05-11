@@ -88,7 +88,7 @@ def load_config() -> Config:
             errors.append(f"  {name} must be a positive integer, got: {raw!r}")
             return default
 
-    run_interval = parse_positive_int("RUN_INTERVAL", 3600)
+    run_interval = parse_positive_int("RUN_INTERVAL", 600)
     retry_count = parse_positive_int("RETRY_COUNT", 3)
     retry_delay = parse_positive_int("RETRY_DELAY", 60)
 

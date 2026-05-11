@@ -28,7 +28,7 @@ All configuration is via environment variables.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RUN_INTERVAL` | `3600` | Seconds between runs |
+| `RUN_INTERVAL` | `600` | Seconds between polls for new instances |
 | `RETRY_COUNT` | `3` | Number of retries per instance on API failure or incomplete data |
 | `RETRY_DELAY` | `60` | Seconds to wait between retries |
 | `VERBOSE` | _(unset)_ | Set to `1`, `true`, or `yes` for verbose logging |
