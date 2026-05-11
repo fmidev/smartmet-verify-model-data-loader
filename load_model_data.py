@@ -237,6 +237,7 @@ def fetch_instance_data(
             "coords": f"POINT({lon} {lat})",
             "parameter-name": param_str,
             "datetime": f"{instance['start']}/{instance['end']}",
+            "who": "smartmet-verify-model-data-loader",
         }
         if cfg.dry_run:
             log.info("  GET %s params=%s", url, query_params)
