@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get latest CPython release
@@ -51,16 +51,7 @@ jobs:
           sed -i "s/^ARG PYTHON_VERSION=.*/ARG PYTHON_VERSION=$LATEST/" Dockerfile
           sed -i "s/^ARG PYTHON_VERSION=.*/ARG PYTHON_VERSION=$LATEST/" Dockerfile.dev
 
-      - name: Create pull request
-        if: steps.check.outputs.needed == 'true'
-        uses: actions/checkout@v6
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          persist-credentials: true
-        continue-on-error: true
-
-      - name: Open PR via gh
+      - name: Open PR
         if: steps.check.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
