@@ -1,142 +1,199 @@
 #!/usr/bin/env python3
 
-import argparse
 import io
+import logging
 import math
 import os
+import signal
 import sys
+import threading
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 import psycopg2
 import requests
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
+log = logging.getLogger(__name__)
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Fetch forecast data from SmartMet Server and load into the verification database"
-    )
-    parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print DB queries and fetch URLs, make no changes")
-    parser.add_argument("-q", "--server", required=True,
-                        help="SmartMet Server hostname")
-    parser.add_argument("-t", "--timestep", default="data",
-                        help="Timeseries timestep (default: 'data')")
-    parser.add_argument("--proxy",
-                        help="HTTP(S) proxy URL; also settable via HTTP_PROXY/HTTPS_PROXY env vars")
-    parser.add_argument("-p", "--parameters", required=True,
-                        help="Parameter(s), comma-separated newbase names")
-    parser.add_argument("-b", "--smartmet-producer", required=True,
-                        help="SmartMet Server producer name")
-    parser.add_argument("-r", "--verif-producer", required=True,
-                        help="Verification database producer name")
-
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("-s", "--stationgroup",
-                       help="Station group name(s), comma-separated")
-    group.add_argument("-S", "--station",
-                       help="Station FMISID(s), comma-separated")
-
-    return parser.parse_args()
+_stop = threading.Event()
+signal.signal(signal.SIGTERM, lambda s, f: _stop.set())
+signal.signal(signal.SIGINT, lambda s, f: _stop.set())
 
 
-def connect_db():
+@dataclass(frozen=True)
+class Config:
+    server_url: str
+    smartmet_producer: str
+    verif_producer: str
+    parameters: str
+    stationgroup: Optional[str]
+    station: Optional[str]
+    timestep: str
+    run_interval: int
+    verbose: bool
+    dry_run: bool
+    db_user: str
+    db_password: str
+    db_host: str
+    db_name: str
+    db_port: str
+
+
+def load_config() -> Config:
+    errors = []
+
+    def require(name: str) -> str:
+        val = os.environ.get(name, "").strip()
+        if not val:
+            errors.append(f"  {name} is required")
+        return val
+
+    def optional(name: str, default: str = "") -> str:
+        return os.environ.get(name, default).strip()
+
+    server_url = require("SMARTMET_SERVER_URL").rstrip("/")
+    smartmet_producer = require("SMARTMET_PRODUCER")
+    verif_producer = require("VERIF_PRODUCER")
+    parameters = require("SMARTMET_PARAMETERS")
+    db_user = require("VERIFIMPORT_USER")
+    db_password = require("VERIFIMPORT_PASSWORD")
+    db_host = require("VERIFIMPORT_HOST")
+    db_name = require("VERIFIMPORT_DBNAME")
+    db_port = require("VERIFIMPORT_PORT")
+
+    stationgroup = optional("SMARTMET_STATIONGROUP") or None
+    station = optional("SMARTMET_STATION") or None
+
+    if not stationgroup and not station:
+        errors.append("  One of SMARTMET_STATIONGROUP or SMARTMET_STATION is required")
+    if stationgroup and station:
+        errors.append("  SMARTMET_STATIONGROUP and SMARTMET_STATION are mutually exclusive")
+
+    run_interval_str = optional("RUN_INTERVAL", "3600")
     try:
-        dsn = "user={} password={} host={} dbname={} port={}".format(
-            os.environ["VERIFIMPORT_USER"],
-            os.environ["VERIFIMPORT_PASSWORD"],
-            os.environ["VERIFIMPORT_HOST"],
-            os.environ["VERIFIMPORT_DBNAME"],
-            os.environ["VERIFIMPORT_PORT"],
-        )
-    except KeyError as e:
-        print(f"Missing env var {e}. Required: VERIFIMPORT_USER, VERIFIMPORT_PASSWORD, "
-              "VERIFIMPORT_HOST, VERIFIMPORT_DBNAME, VERIFIMPORT_PORT")
+        run_interval = int(run_interval_str)
+        if run_interval <= 0:
+            raise ValueError
+    except ValueError:
+        errors.append(f"  RUN_INTERVAL must be a positive integer (seconds), got: {run_interval_str!r}")
+        run_interval = 3600
+
+    if errors:
+        log.error("Configuration errors:\n%s", "\n".join(errors))
         sys.exit(1)
-    conn = psycopg2.connect(dsn)
+
+    return Config(
+        server_url=server_url,
+        smartmet_producer=smartmet_producer,
+        verif_producer=verif_producer,
+        parameters=parameters,
+        stationgroup=stationgroup,
+        station=station,
+        timestep=optional("SMARTMET_TIMESTEP", "data"),
+        run_interval=run_interval,
+        verbose=optional("VERBOSE").lower() in ("1", "true", "yes"),
+        dry_run=optional("DRY_RUN").lower() in ("1", "true", "yes"),
+        db_user=db_user,
+        db_password=db_password,
+        db_host=db_host,
+        db_name=db_name,
+        db_port=db_port,
+    )
+
+
+def connect_db(cfg: Config):
+    conn = psycopg2.connect(
+        user=cfg.db_user,
+        password=cfg.db_password,
+        host=cfg.db_host,
+        dbname=cfg.db_name,
+        port=cfg.db_port,
+    )
     conn.autocommit = True
     return conn
 
 
-def validate_params(args, cur):
+def validate_params(cfg: Config, cur):
     params = []
-    for orig in args.parameters.split(","):
+    for orig in cfg.parameters.split(","):
         name = orig[:-4] if orig.endswith(".raw") else orig
         query = "SELECT parameter_id FROM parameter_map WHERE category = 'newbase' AND alternative_name = %s"
-        if args.dry_run:
-            print("QUERY:", cur.mogrify(query, (name,)).decode())
+        if cfg.dry_run:
+            log.info("QUERY: %s", cur.mogrify(query, (name,)).decode())
         cur.execute(query, (name,))
         row = cur.fetchone()
         if row is None:
-            print(f"Parameter '{name}' not recognized by verif db")
+            log.warning("Parameter '%s' not recognized by verif db", name)
         else:
-            if args.verbose:
-                print(f"{name} -> id {row[0]}")
+            if cfg.verbose:
+                log.info("%s -> id %d", name, row[0])
             params.append({"verif_name": name, "verif_id": row[0], "smartmet_name": orig})
     if not params:
-        print("No valid parameters found")
-        sys.exit(1)
+        raise RuntimeError("No valid parameters found")
     return params
 
 
-def get_stations(args, cur):
-    if args.stationgroup:
-        arglist = tuple(args.stationgroup.split(","))
+def get_stations(cfg: Config, cur):
+    if cfg.stationgroup:
+        arglist = tuple(cfg.stationgroup.split(","))
         query = """SELECT l.fmisid, l.name, st_x(l.geom), st_y(l.geom)
 FROM locations_v l, targetgroup_map m, targetgroups_v g
 WHERE m.target_id = l.fmisid AND m.group_id = g.id AND g.name IN %s
 GROUP BY 1,2,3,4"""
     else:
-        arglist = tuple(args.station.split(","))
+        arglist = tuple(cfg.station.split(","))
         query = "SELECT fmisid, name, st_x(geom), st_y(geom) FROM locations_v WHERE fmisid IN %s"
 
-    if args.dry_run:
-        print("QUERY:", cur.mogrify(query, (arglist,)).decode())
+    if cfg.dry_run:
+        log.info("QUERY: %s", cur.mogrify(query, (arglist,)).decode())
     cur.execute(query, (arglist,))
     stations = cur.fetchall()
 
     if not stations:
-        print("No stations found with given arguments")
-        sys.exit(1)
+        raise RuntimeError("No stations found with given arguments")
     return stations
 
 
-def get_producer_id(cur, name):
+def get_producer_id(cur, name: str) -> int:
     cur.execute("SELECT id FROM producers WHERE name = %s", (name,))
     row = cur.fetchone()
     if row is None:
-        print(f"Producer '{name}' not found in database")
-        sys.exit(1)
+        raise RuntimeError(f"Producer '{name}' not found in database")
     return row[0]
 
 
-def fetch_forecasts(args, stations, params):
-    proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
+def fetch_forecasts(cfg: Config, stations, params):
     param_str = ",".join(p["smartmet_name"] for p in params)
     base_url = (
-        f"http://{args.server}/timeseries"
+        f"{cfg.server_url}/timeseries"
         f"?format=json&timeformat=timestamp&precision=double"
-        f"&tz=utc&starttime=data&endtime=data&timestep={args.timestep}"
+        f"&tz=utc&starttime=data&endtime=data&timestep={cfg.timestep}"
         f"&who=smartmet-verif"
     )
     data = {}
     for fmisid, name, lon, lat in stations:
-        if args.verbose:
-            print(f"Station {fmisid} {name} ({lon},{lat})")
+        if cfg.verbose:
+            log.info("Station %d %s (%f,%f)", fmisid, name, lon, lat)
         url = (
             f"{base_url}&lonlat={lon},{lat}"
             f"&param=origintime,time,{param_str}"
-            f"&producer={args.smartmet_producer}&origintime=latest"
+            f"&producer={cfg.smartmet_producer}&origintime=latest"
         )
-        if args.dry_run:
-            print("URL:", url)
+        if cfg.dry_run:
+            log.info("URL: %s", url)
             continue
-        r = requests.get(url, proxies=proxies)
+        r = requests.get(url)
         if r.status_code != requests.codes.ok:
-            print(f"HTTP {r.status_code} for station {fmisid}")
+            log.warning("HTTP %d for station %d", r.status_code, fmisid)
             if r.status_code == 400:
                 continue
-            sys.exit(1)
+            raise RuntimeError(f"HTTP {r.status_code} fetching station {fmisid}")
         data[fmisid] = r.json()
     return data
 
@@ -144,7 +201,7 @@ def fetch_forecasts(args, stations, params):
 _COPY_COLUMNS = ["producer_id", "target_id", "analysis_time", "parameter_id", "forecaster_id", "leadtime", "value"]
 
 
-def build_copy_buffer(producer_id, params, data):
+def build_copy_buffer(producer_id: int, params, data):
     rows = []
     analysis_time = None
 
@@ -168,7 +225,7 @@ def build_copy_buffer(producer_id, params, data):
     return rows, analysis_time
 
 
-def load_to_db(cur, producer_id, producer_name, analysis_time, rows):
+def load_to_db(cur, producer_id: int, producer_name: str, analysis_time, rows):
     tablename = f"{producer_name}_forecasts"
 
     cur.execute(
@@ -179,12 +236,12 @@ def load_to_db(cur, producer_id, producer_name, analysis_time, rows):
     buf = io.StringIO("\n".join(rows))
 
     try:
-        print(f"Loading {len(rows)} rows into {tablename} via COPY")
+        log.info("Loading %d rows into %s via COPY", len(rows), tablename)
         cur.copy_from(buf, tablename, columns=_COPY_COLUMNS)
     except psycopg2.IntegrityError as e:
         if e.pgcode != "23505":
             raise
-        print("COPY failed (duplicate key), switching to INSERT/UPDATE")
+        log.warning("COPY failed (duplicate key), switching to INSERT/UPDATE")
         cur.execute(
             "CREATE TEMP TABLE temp_load (producer_id int, target_id int, analysis_time timestamptz, "
             "parameter_id int, forecaster_id int, leadtime int, value numeric)"
@@ -200,36 +257,54 @@ def load_to_db(cur, producer_id, producer_name, analysis_time, rows):
             DO UPDATE SET forecaster_id = EXCLUDED.forecaster_id, value = EXCLUDED.value"""
         )
 
-    print(f"Done: {len(rows)} rows loaded into {tablename}")
+    log.info("Loaded %d rows into %s", len(rows), tablename)
+
+
+def run_once(cfg: Config):
+    conn = connect_db(cfg)
+    try:
+        cur = conn.cursor()
+        params = validate_params(cfg, cur)
+        stations = get_stations(cfg, cur)
+        producer_id = get_producer_id(cur, cfg.verif_producer)
+
+        log.info("Fetching forecasts from %s", cfg.server_url)
+        data = fetch_forecasts(cfg, stations, params)
+
+        if not data:
+            log.warning("No data retrieved from SmartMet Server")
+            return
+
+        rows, analysis_time = build_copy_buffer(producer_id, params, data)
+
+        if not rows:
+            log.warning("No valid data rows to load")
+            return
+
+        if cfg.dry_run:
+            log.info("Dry run: would load %d rows for analysis time %s", len(rows), analysis_time)
+            return
+
+        load_to_db(cur, producer_id, cfg.verif_producer, analysis_time, rows)
+    finally:
+        conn.close()
 
 
 def main():
-    args = parse_args()
-    conn = connect_db()
-    cur = conn.cursor()
+    cfg = load_config()
+    log.info(
+        "Starting: server=%s producer=%s interval=%ds",
+        cfg.server_url, cfg.verif_producer, cfg.run_interval,
+    )
 
-    params = validate_params(args, cur)
-    stations = get_stations(args, cur)
-    producer_id = get_producer_id(cur, args.verif_producer)
+    while not _stop.is_set():
+        try:
+            run_once(cfg)
+        except Exception:
+            log.exception("Run failed")
+        _stop.wait(timeout=cfg.run_interval)
 
-    print(f"Fetching forecasts from {args.server}...")
-    data = fetch_forecasts(args, stations, params)
-
-    if not data:
-        print("No data retrieved from SmartMet Server")
-        sys.exit(0)
-
-    rows, analysis_time = build_copy_buffer(producer_id, params, data)
-
-    if not rows:
-        print("No valid data rows to load")
-        sys.exit(0)
-
-    if args.dry_run:
-        print(f"Dry run: would load {len(rows)} rows for analysis time {analysis_time}")
-        sys.exit(0)
-
-    load_to_db(cur, producer_id, args.verif_producer, analysis_time, rows)
+    log.info("Shutting down")
 
 
 if __name__ == "__main__":

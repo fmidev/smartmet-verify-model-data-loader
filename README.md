@@ -1,81 +1,75 @@
-# smartmet-data-verif
+# smartmet-verify-model-data-loader
 
-Tools for fetching forecast data from SmartMet Server and loading it into a verification database.
+Daemon that fetches forecast data from a SmartMet Server timeseries API and loads it into a SmartMet Verify verification database. Runs continuously, repeating at a configurable interval.
 
-## Prerequisites
+## Configuration
 
-Both scripts require a PostgreSQL verification database. Connection is configured via environment variables:
+All configuration is via environment variables.
 
-```
-export VERIFIMPORT_USER=...
-export VERIFIMPORT_PASSWORD=...
-export VERIFIMPORT_HOST=...
-export VERIFIMPORT_DBNAME=...
-export VERIFIMPORT_PORT=...
-```
+### Required
 
-Python dependencies: `requests`, `psycopg2`.
-
-## fetch_to_verif.py
-
-Fetches forecast data from a SmartMet Server timeseries API and writes a CSV file (`out.csv`).
-
-```
-fetch_to_verif.py -q SERVER -b SMARTMET_PRODUCER -r VERIF_PRODUCER \
-    -p PARAMS (-s STATIONGROUP | -S STATION) [OPTIONS]
-```
-
-| Option | Description |
+| Variable | Description |
 |---|---|
-| `-q`, `--server` | SmartMet Server hostname (required) |
-| `-p`, `--parameters` | Parameter(s), comma-separated newbase names (required) |
-| `-b`, `--smartmet-producer` | SmartMet Server producer name (required) |
-| `-r`, `--verif-producer` | Verif database producer name (required) |
-| `-s`, `--stationgroup` | Station group name(s), comma-separated |
-| `-S`, `--station` | Station ID(s), comma-separated |
-| `-t`, `--timestep` | Timestep for timeseries query (default: `data`) |
-| `--proxy` | HTTP(S) proxy URL |
-| `-v`, `--verbose` | Verbose output |
-| `--dry-run` | Print queries and URLs without making changes |
+| `SMARTMET_SERVER_URL` | SmartMet Server base URL including scheme, e.g. `https://smartmet.example.com` |
+| `SMARTMET_PRODUCER` | SmartMet Server producer name |
+| `VERIF_PRODUCER` | Verification database producer name |
+| `SMARTMET_PARAMETERS` | Comma-separated parameter list (newbase names), e.g. `Temperature,WindSpeed` |
+| `SMARTMET_STATIONGROUP` | Station group name(s), comma-separated *(mutually exclusive with `SMARTMET_STATION`)* |
+| `SMARTMET_STATION` | Station FMISID(s), comma-separated *(mutually exclusive with `SMARTMET_STATIONGROUP`)* |
+| `VERIFIMPORT_USER` | Database user |
+| `VERIFIMPORT_PASSWORD` | Database password |
+| `VERIFIMPORT_HOST` | Database host |
+| `VERIFIMPORT_DBNAME` | Database name |
+| `VERIFIMPORT_PORT` | Database port |
 
-Example:
+### Optional
 
-```
-./fetch_to_verif.py -q smartmet.example.com -b ecmwf -r ecmwf_verif \
-    -p Temperature,Pressure -s synop_finland -t 60
-```
+| Variable | Default | Description |
+|---|---|---|
+| `RUN_INTERVAL` | `3600` | Seconds between runs |
+| `SMARTMET_TIMESTEP` | `data` | Timeseries timestep passed to SmartMet Server |
+| `VERBOSE` | _(unset)_ | Set to `1`, `true`, or `yes` for verbose logging |
+| `DRY_RUN` | _(unset)_ | Set to `1`, `true`, or `yes` to log queries/URLs without writing to the database |
+| `HTTP_PROXY` / `HTTPS_PROXY` | _(unset)_ | Standard proxy env vars, forwarded to outbound HTTP requests |
 
-## verif_loader.py
+## Container usage
 
-Loads a CSV file (produced by `fetch_to_verif.py`) into the verification database.
+```bash
+docker build -t smartmet-verify-model-data-loader .
 
-```
-verif_loader.py -r PRODUCER FILE
-```
-
-| Option | Description |
-|---|---|
-| `-r`, `--producer` | Producer name (required) |
-| `FILE` | Input CSV file |
-
-Example:
-
-```
-./verif_loader.py -r ecmwf_verif out.csv
-```
-
-## Container Usage
-
-For Kubernetes / container deployments, copy the scripts directly into the image:
-
-```dockerfile
-FROM python:3.11-slim
-
-RUN pip install --no-cache-dir requests psycopg2-binary
-
-COPY fetch_to_verif.py verif_loader.py /opt/smartmet-data-verif/
-
-ENTRYPOINT ["python3"]
+docker run \
+  -e SMARTMET_SERVER_URL=https://smartmet.example.com \
+  -e SMARTMET_PRODUCER=ecmwf_world_surface \
+  -e VERIF_PRODUCER=ecmwf \
+  -e SMARTMET_PARAMETERS=Temperature,Pressure,Humidity,WindSpeed,WindDirection \
+  -e SMARTMET_STATIONGROUP=synop_europe \
+  -e SMARTMET_TIMESTEP=60 \
+  -e RUN_INTERVAL=3600 \
+  -e VERIFIMPORT_USER=verifuser \
+  -e VERIFIMPORT_PASSWORD=secret \
+  -e VERIFIMPORT_HOST=localhost \
+  -e VERIFIMPORT_DBNAME=verifdb \
+  -e VERIFIMPORT_PORT=5432 \
+  smartmet-verify-model-data-loader
 ```
 
-Pass environment variables and arguments via your pod spec or job template.
+The container responds to `SIGTERM` and `SIGINT` for clean shutdown.
+
+## Local development
+
+```bash
+pip install -r requirements.txt
+
+export SMARTMET_SERVER_URL=https://smartmet.example.com
+export SMARTMET_PRODUCER=ecmwf_world_surface
+export VERIF_PRODUCER=ecmwf
+export SMARTMET_PARAMETERS=Temperature,WindSpeed
+export SMARTMET_STATIONGROUP=synop_finland
+export VERIFIMPORT_USER=verifuser
+export VERIFIMPORT_PASSWORD=secret
+export VERIFIMPORT_HOST=localhost
+export VERIFIMPORT_DBNAME=verifdb
+export VERIFIMPORT_PORT=5432
+
+python3 load_model_data.py
+```
