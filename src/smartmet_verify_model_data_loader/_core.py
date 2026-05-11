@@ -62,11 +62,11 @@ def load_config() -> Config:
     edr_collection = require("EDR_COLLECTION")
     verif_producer = require("VERIF_PRODUCER")
     parameters = require("SMARTMET_PARAMETERS")
-    db_user = require("VERIFIMPORT_USER")
-    db_password = require("VERIFIMPORT_PASSWORD")
-    db_host = require("VERIFIMPORT_HOST")
-    db_name = require("VERIFIMPORT_DBNAME")
-    db_port = require("VERIFIMPORT_PORT")
+    db_user = require("VERIFICATION_DB_USER")
+    db_password = require("VERIFICATION_DB_PASSWORD")
+    db_host = require("VERIFICATION_DB_HOST")
+    db_name = require("VERIFICATION_DB_NAME")
+    db_port = require("VERIFICATION_DB_PORT")
 
     stationgroup = optional("SMARTMET_STATIONGROUP") or None
     station = optional("SMARTMET_STATION") or None

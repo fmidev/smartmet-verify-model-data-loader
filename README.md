@@ -18,11 +18,11 @@ All configuration is via environment variables. Copy `.env.template` to `.env` a
 | `SMARTMET_PARAMETERS` | Comma-separated parameter list (newbase names), e.g. `Temperature,WindSpeedMS` |
 | `SMARTMET_STATIONGROUP` | Station group name(s), comma-separated *(mutually exclusive with `SMARTMET_STATION`)* |
 | `SMARTMET_STATION` | Station FMISID(s), comma-separated *(mutually exclusive with `SMARTMET_STATIONGROUP`)* |
-| `VERIFIMPORT_USER` | Database user |
-| `VERIFIMPORT_PASSWORD` | Database password |
-| `VERIFIMPORT_HOST` | Database host |
-| `VERIFIMPORT_DBNAME` | Database name |
-| `VERIFIMPORT_PORT` | Database port |
+| `VERIFICATION_DB_USER` | Database user |
+| `VERIFICATION_DB_PASSWORD` | Database password |
+| `VERIFICATION_DB_HOST` | Database host |
+| `VERIFICATION_DB_NAME` | Database name |
+| `VERIFICATION_DB_PORT` | Database port |
 
 ### Optional
 
@@ -47,11 +47,11 @@ docker run \
   -e SMARTMET_PARAMETERS=Temperature,Pressure,Humidity,WindSpeedMS,WindDirection \
   -e SMARTMET_STATIONGROUP=synop_europe \
   -e RUN_INTERVAL=3600 \
-  -e VERIFIMPORT_USER=verifuser \
-  -e VERIFIMPORT_PASSWORD=secret \
-  -e VERIFIMPORT_HOST=localhost \
-  -e VERIFIMPORT_DBNAME=verifdb \
-  -e VERIFIMPORT_PORT=5432 \
+  -e VERIFICATION_DB_USER=verifuser \
+  -e VERIFICATION_DB_PASSWORD=secret \
+  -e VERIFICATION_DB_HOST=localhost \
+  -e VERIFICATION_DB_NAME=verifdb \
+  -e VERIFICATION_DB_PORT=5432 \
   smartmet-verify-model-data-loader
 ```
 
