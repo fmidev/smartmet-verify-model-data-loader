@@ -515,6 +515,8 @@ class TestLoadToDb:
 
         cur = MagicMock()
         cur.copy_from.side_effect = _FKError()
-        with patch("smartmet_verify_model_data_loader._core.psycopg2.IntegrityError", _FKError):
-            with pytest.raises(_FKError):
-                load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), self._rows())
+        with (
+            patch("smartmet_verify_model_data_loader._core.psycopg2.IntegrityError", _FKError),
+            pytest.raises(_FKError),
+        ):
+            load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), self._rows())
