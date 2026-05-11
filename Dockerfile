@@ -1,13 +1,16 @@
-FROM python:3.14-slim
+ARG PYTHON_VERSION=3.14.4
+FROM python:${PYTHON_VERSION}-slim
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY load_model_data.py .
+COPY src/ ./src/
+
+ENV PYTHONPATH=/app/src
 
 RUN useradd -r -u 1000 appuser
 USER appuser
 
-ENTRYPOINT ["python3", "-u", "load_model_data.py"]
+ENTRYPOINT ["python", "-u", "-m", "smartmet_verify_model_data_loader"]

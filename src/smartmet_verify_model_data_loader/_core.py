@@ -10,7 +10,6 @@ import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 import psycopg2
 import requests
@@ -28,13 +27,13 @@ signal.signal(signal.SIGINT, lambda s, f: _stop.set())
 
 
 @dataclass(frozen=True)
-class Config:
+class Config:  # pylint: disable=too-many-instance-attributes
     server_url: str
     edr_collection: str
     verif_producer: str
     parameters: str
-    stationgroup: Optional[str]
-    station: Optional[str]
+    stationgroup: str | None
+    station: str | None
     run_interval: int
     retry_count: int
     retry_delay: int
@@ -48,7 +47,7 @@ class Config:
 
 
 def load_config() -> Config:
-    errors = []
+    errors: list[str] = []
 
     def require(name: str) -> str:
         val = os.environ.get(name, "").strip()
@@ -116,7 +115,7 @@ def load_config() -> Config:
     )
 
 
-def connect_db(cfg: Config):
+def connect_db(cfg: Config) -> "psycopg2.connection":
     conn = psycopg2.connect(
         user=cfg.db_user,
         password=cfg.db_password,
@@ -128,11 +127,14 @@ def connect_db(cfg: Config):
     return conn
 
 
-def validate_params(cfg: Config, cur) -> list:
-    params = []
+def validate_params(cfg: Config, cur: "psycopg2.cursor") -> list[dict[str, object]]:
+    params: list[dict[str, object]] = []
     for orig in cfg.parameters.split(","):
         name = orig[:-4] if orig.endswith(".raw") else orig
-        query = "SELECT parameter_id FROM parameter_map WHERE category = 'newbase' AND alternative_name = %s"
+        query = (
+            "SELECT parameter_id FROM parameter_map "
+            "WHERE category = 'newbase' AND alternative_name = %s"
+        )
         if cfg.dry_run:
             log.info("QUERY: %s", cur.mogrify(query, (name,)).decode())
         cur.execute(query, (name,))
@@ -148,7 +150,7 @@ def validate_params(cfg: Config, cur) -> list:
     return params
 
 
-def get_stations(cfg: Config, cur) -> list:
+def get_stations(cfg: Config, cur: "psycopg2.cursor") -> list[tuple[object, ...]]:
     if cfg.stationgroup:
         arglist = tuple(cfg.stationgroup.split(","))
         query = """SELECT l.fmisid, l.name, st_x(l.geom), st_y(l.geom)
@@ -156,34 +158,34 @@ FROM locations_v l, targetgroup_map m, targetgroups_v g
 WHERE m.target_id = l.fmisid AND m.group_id = g.id AND g.name IN %s
 GROUP BY 1,2,3,4"""
     else:
-        arglist = tuple(cfg.station.split(","))
+        arglist = tuple(cfg.station.split(","))  # type: ignore[union-attr]
         query = "SELECT fmisid, name, st_x(geom), st_y(geom) FROM locations_v WHERE fmisid IN %s"
 
     if cfg.dry_run:
         log.info("QUERY: %s", cur.mogrify(query, (arglist,)).decode())
     cur.execute(query, (arglist,))
-    stations = cur.fetchall()
+    stations: list[tuple[object, ...]] = cur.fetchall()
 
     if not stations:
         raise RuntimeError("No stations found with given arguments")
     return stations
 
 
-def get_producer_id(cur, name: str) -> int:
+def get_producer_id(cur: "psycopg2.cursor", name: str) -> int:
     cur.execute("SELECT id FROM producers WHERE name = %s", (name,))
     row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"Producer '{name}' not found in database")
-    return row[0]
+    return int(row[0])
 
 
-def get_loaded_analysis_times(cur, producer_id: int) -> set:
+def get_loaded_analysis_times(cur: "psycopg2.cursor", producer_id: int) -> set[datetime]:
     cur.execute("SELECT analysis_time FROM forecasts WHERE producer_id = %s", (producer_id,))
     # Strip timezone from timestamptz results; all times are UTC throughout
     return {row[0].replace(tzinfo=None) for row in cur.fetchall()}
 
 
-def _parse_expected_steps(title: str) -> Optional[int]:
+def _parse_expected_steps(title: str) -> int | None:
     """Extract expected timestep count from the SmartMet instance title string."""
     m = re.search(r"Starttime:\s*(\S+)\s+Endtime:\s*(\S+)\s+Timestep:\s*(\d+)", title)
     if not m:
@@ -199,11 +201,11 @@ def _parse_expected_steps(title: str) -> Optional[int]:
         return None
 
 
-def get_instances(cfg: Config, session: requests.Session) -> list:
+def get_instances(cfg: Config, session: requests.Session) -> list[dict[str, object]]:
     url = f"{cfg.server_url}/edr/collections/{cfg.edr_collection}/instances"
     r = session.get(url)
     r.raise_for_status()
-    instances = []
+    instances: list[dict[str, object]] = []
     for inst in r.json().get("instances", []):
         interval = inst["extent"]["temporal"]["interval"][0]
         instances.append({
@@ -212,7 +214,7 @@ def get_instances(cfg: Config, session: requests.Session) -> list:
             "end": interval[1],
             "expected_steps": _parse_expected_steps(inst.get("title", "")),
         })
-    instances.sort(key=lambda x: x["id"])  # oldest first → chronological backfill
+    instances.sort(key=lambda x: str(x["id"]))  # oldest first → chronological backfill
     return instances
 
 
@@ -221,18 +223,22 @@ def parse_instance_id(instance_id: str) -> datetime:
 
 
 def fetch_instance_data(
-    cfg: Config, session: requests.Session, instance: dict, stations: list, params: list
-) -> dict:
+    cfg: Config,
+    session: requests.Session,
+    instance: dict[str, object],
+    stations: list[tuple[object, ...]],
+    params: list[dict[str, object]],
+) -> dict[object, object]:
     """Fetch CoverageJSON for every station for one instance. Returns {fmisid: covjson}."""
-    param_str = ",".join(p["edr_name"].lower() for p in params)
+    param_str = ",".join(str(p["edr_name"]).lower() for p in params)
     url = (
         f"{cfg.server_url}/edr/collections/{cfg.edr_collection}"
         f"/instances/{instance['id']}/position"
     )
-    data = {}
+    data: dict[object, object] = {}
     for fmisid, name, lon, lat in stations:
         if cfg.verbose:
-            log.info("  Station %d %s (%f,%f)", fmisid, name, lon, lat)
+            log.info("  Station %s %s (%f,%f)", fmisid, name, lon, lat)
         query_params = {
             "coords": f"POINT({lon} {lat})",
             "parameter-name": param_str,
@@ -244,7 +250,10 @@ def fetch_instance_data(
             continue
         r = session.get(url, params=query_params)
         if not r.ok:
-            log.warning("HTTP %d for station %d (instance %s)", r.status_code, fmisid, instance["id"])
+            log.warning(
+                "HTTP %d for station %s (instance %s)",
+                r.status_code, fmisid, instance["id"],
+            )
             if r.status_code == 400:
                 continue
             raise RuntimeError(f"HTTP {r.status_code} fetching station {fmisid}")
@@ -252,7 +261,9 @@ def fetch_instance_data(
     return data
 
 
-def _check_completeness(instance: dict, data: dict) -> Optional[str]:
+def _check_completeness(
+    instance: dict[str, object], data: dict[object, object]
+) -> str | None:
     """Return a description of the problem if data is incomplete, else None.
 
     Completeness is checked two ways:
@@ -262,10 +273,11 @@ def _check_completeness(instance: dict, data: dict) -> Optional[str]:
     expected = instance.get("expected_steps")
 
     for fmisid, covjson in data.items():
-        t_values = covjson["domain"]["axes"]["t"]["values"]
+        assert isinstance(covjson, dict)
+        t_values: list[str] = covjson["domain"]["axes"]["t"]["values"]
         actual = len(t_values)
 
-        if expected is not None:
+        if isinstance(expected, int):
             if actual < expected:
                 return f"station {fmisid}: {actual}/{expected} timesteps"
         elif actual >= 2:
@@ -279,10 +291,14 @@ def _check_completeness(instance: dict, data: dict) -> Optional[str]:
 
 
 def fetch_with_retry(
-    cfg: Config, session: requests.Session, instance: dict, stations: list, params: list
-) -> dict:
+    cfg: Config,
+    session: requests.Session,
+    instance: dict[str, object],
+    stations: list[tuple[object, ...]],
+    params: list[dict[str, object]],
+) -> dict[object, object]:
     """Fetch instance data, retrying on failure or incomplete timesteps."""
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
 
     for attempt in range(cfg.retry_count + 1):
         if attempt > 0:
@@ -295,7 +311,7 @@ def fetch_with_retry(
 
         try:
             data = fetch_instance_data(cfg, session, instance, stations, params)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             last_exc = e
             log.warning(
                 "Fetch error for instance %s (attempt %d/%d): %s",
@@ -316,39 +332,56 @@ def fetch_with_retry(
     raise last_exc or RuntimeError(f"Failed to fetch instance {instance['id']}")
 
 
-_COPY_COLUMNS = ["producer_id", "target_id", "analysis_time", "parameter_id", "forecaster_id", "leadtime", "value"]
+_COPY_COLUMNS = [
+    "producer_id", "target_id", "analysis_time",
+    "parameter_id", "forecaster_id", "leadtime", "value",
+]
 
 
-def build_copy_buffer(producer_id: int, params: list, instance: dict, data: dict):
-    analysis_time = parse_instance_id(instance["id"])
-    rows = []
+def build_copy_buffer(
+    producer_id: int,
+    params: list[dict[str, object]],
+    instance: dict[str, object],
+    data: dict[object, object],
+) -> tuple[list[str], datetime]:
+    analysis_time = parse_instance_id(str(instance["id"]))
+    rows: list[str] = []
 
     for fmisid, covjson in data.items():
+        assert isinstance(covjson, dict)
         times = [
             datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")
             for t in covjson["domain"]["axes"]["t"]["values"]
         ]
         for p in params:
-            key = p["edr_name"].lower()
+            key = str(p["edr_name"]).lower()
             if key not in covjson.get("ranges", {}):
                 continue
-            values = covjson["ranges"][key]["values"]
-            for valid_dt, value in zip(times, values):
+            values: list[object] = covjson["ranges"][key]["values"]
+            for valid_dt, value in zip(times, values, strict=False):
                 if value is None:
                     continue
                 leadtime = math.floor((valid_dt - analysis_time).total_seconds() / 3600)
                 rows.append(
-                    f"{producer_id}\t{fmisid}\t{analysis_time}\t{p['verif_id']}\t\\N\t{leadtime}\t{value}"
+                    f"{producer_id}\t{fmisid}\t{analysis_time}\t"
+                    f"{p['verif_id']}\t\\N\t{leadtime}\t{value}"
                 )
 
     return rows, analysis_time
 
 
-def load_to_db(cur, producer_id: int, producer_name: str, analysis_time: datetime, rows: list):
+def load_to_db(
+    cur: "psycopg2.cursor",
+    producer_id: int,
+    producer_name: str,
+    analysis_time: datetime,
+    rows: list[str],
+) -> None:
     tablename = f"{producer_name}_forecasts"
 
     cur.execute(
-        "INSERT INTO forecasts(producer_id, analysis_time, arrive_time) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+        "INSERT INTO forecasts(producer_id, analysis_time, arrive_time) "
+        "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
         (producer_id, analysis_time, analysis_time),
     )
 
@@ -362,24 +395,26 @@ def load_to_db(cur, producer_id: int, producer_name: str, analysis_time: datetim
             raise
         log.warning("COPY failed (duplicate key), switching to INSERT/UPDATE")
         cur.execute(
-            "CREATE TEMP TABLE temp_load (producer_id int, target_id int, analysis_time timestamptz, "
+            "CREATE TEMP TABLE temp_load "
+            "(producer_id int, target_id int, analysis_time timestamptz, "
             "parameter_id int, forecaster_id int, leadtime int, value numeric)"
         )
         buf.seek(0)
         cur.copy_from(buf, "temp_load", columns=_COPY_COLUMNS)
         cur.execute(
-            f"""INSERT INTO {tablename}
-                (producer_id, analysis_time, target_id, parameter_id, forecaster_id, leadtime, value)
-            SELECT producer_id, analysis_time, target_id, parameter_id, forecaster_id, leadtime, value
-            FROM temp_load
-            ON CONFLICT (producer_id, analysis_time, target_id, parameter_id, leadtime)
-            DO UPDATE SET forecaster_id = EXCLUDED.forecaster_id, value = EXCLUDED.value"""
+            f"INSERT INTO {tablename} "
+            "(producer_id, analysis_time, target_id, parameter_id, "
+            "forecaster_id, leadtime, value) "
+            "SELECT producer_id, analysis_time, target_id, parameter_id, "
+            "forecaster_id, leadtime, value FROM temp_load "
+            "ON CONFLICT (producer_id, analysis_time, target_id, parameter_id, leadtime) "
+            "DO UPDATE SET forecaster_id = EXCLUDED.forecaster_id, value = EXCLUDED.value"
         )
 
     log.info("Loaded %d rows for instance %s", len(rows), analysis_time)
 
 
-def run_once(cfg: Config):
+def run_once(cfg: Config) -> None:
     conn = connect_db(cfg)
     try:
         cur = conn.cursor()
@@ -390,7 +425,7 @@ def run_once(cfg: Config):
 
         with requests.Session() as session:
             instances = get_instances(cfg, session)
-            new_instances = [i for i in instances if parse_instance_id(i["id"]) not in loaded]
+            new_instances = [i for i in instances if parse_instance_id(str(i["id"])) not in loaded]
             log.info(
                 "Instances: %d total, %d already loaded, %d to process",
                 len(instances), len(loaded), len(new_instances),
@@ -400,7 +435,7 @@ def run_once(cfg: Config):
                 log.info("Processing instance %s", instance["id"])
                 try:
                     data = fetch_with_retry(cfg, session, instance, stations, params)
-                except Exception:
+                except Exception:  # pylint: disable=broad-exception-caught
                     log.exception("Giving up on instance %s", instance["id"])
                     continue
 
@@ -415,18 +450,21 @@ def run_once(cfg: Config):
                     continue
 
                 if cfg.dry_run:
-                    log.info("Dry run: would load %d rows for instance %s", len(rows), instance["id"])
+                    log.info(
+                        "Dry run: would load %d rows for instance %s",
+                        len(rows), instance["id"],
+                    )
                     continue
 
                 try:
                     load_to_db(cur, producer_id, cfg.verif_producer, analysis_time, rows)
-                except Exception:
+                except Exception:  # pylint: disable=broad-exception-caught
                     log.exception("Failed to load instance %s", instance["id"])
     finally:
         conn.close()
 
 
-def main():
+def main() -> None:
     cfg = load_config()
     log.info(
         "Starting: server=%s collection=%s producer=%s interval=%ds",
@@ -436,12 +474,8 @@ def main():
     while not _stop.is_set():
         try:
             run_once(cfg)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             log.exception("Run failed")
         _stop.wait(timeout=cfg.run_interval)
 
     log.info("Shutting down")
-
-
-if __name__ == "__main__":
-    main()

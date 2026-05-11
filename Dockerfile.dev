@@ -1,0 +1,11 @@
+ARG PYTHON_VERSION=3.14.4
+FROM python:${PYTHON_VERSION}-slim
+
+WORKDIR /app
+
+COPY requirements.txt requirements-dev.txt requirements-audit.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt -r requirements-audit.txt
+
+COPY . .
+
+ENV PYTHONPATH=/app/src

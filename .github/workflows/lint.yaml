@@ -1,0 +1,46 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read Python version
+        id: python-version
+        run: echo "version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ steps.python-version.outputs.version }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Add problem matchers
+        run: |
+          echo "::add-matcher::.github/problem-matchers/mypy.json"
+          echo "::add-matcher::.github/problem-matchers/pylint.json"
+          echo "::add-matcher::.github/problem-matchers/bandit.json"
+
+      - name: ruff
+        run: ruff check src tests
+
+      - name: mypy
+        run: mypy src
+
+      - name: pylint
+        run: pylint src
+
+      - name: bandit
+        run: bandit -c bandit.yaml -r src

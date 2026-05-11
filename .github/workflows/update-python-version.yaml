@@ -1,0 +1,79 @@
+name: Update Python version
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest CPython release
+        id: latest
+        run: |
+          LATEST=$(curl -s https://endoflife.date/api/python.json \
+            | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          stable = [r for r in data if not r.get('eol')]
+          latest = max(stable, key=lambda r: r['latest'])
+          print(latest['latest'])
+          ")
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          CURRENT=$(cat .python-version | tr -d '[:space:]')
+          LATEST="${{ steps.latest.outputs.version }}"
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update .python-version and Dockerfile ARG
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          LATEST="${{ steps.latest.outputs.version }}"
+          echo "$LATEST" > .python-version
+          sed -i "s/^ARG PYTHON_VERSION=.*/ARG PYTHON_VERSION=$LATEST/" Dockerfile
+          sed -i "s/^ARG PYTHON_VERSION=.*/ARG PYTHON_VERSION=$LATEST/" Dockerfile.dev
+
+      - name: Create pull request
+        if: steps.check.outputs.needed == 'true'
+        uses: actions/checkout@v6
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          persist-credentials: true
+        continue-on-error: true
+
+      - name: Open PR via gh
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="update-python-${{ steps.latest.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add .python-version Dockerfile Dockerfile.dev
+          git commit -m "chore: update Python to ${{ steps.latest.outputs.version }}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore: update Python to ${{ steps.latest.outputs.version }}" \
+            --body "Automated update from ${{ steps.check.outputs.current }} to ${{ steps.latest.outputs.version }}." \
+            --base main \
+            --head "$BRANCH"

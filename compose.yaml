@@ -1,0 +1,41 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: pytest
+    volumes:
+      - .:/app
+
+  lint:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: >
+      sh -c "ruff check src tests &&
+             mypy src &&
+             pylint src"
+    volumes:
+      - .:/app
+
+  fix:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: >
+      sh -c "ruff format src tests &&
+             ruff check --fix src tests"
+    volumes:
+      - .:/app
+
+  audit:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: pip-audit -r requirements.txt
+    volumes:
+      - .:/app
+
+  app:
+    build: .
+    env_file: .env

@@ -1,0 +1,50 @@
+[project]
+name = "smartmet-verify-model-data-loader"
+version = "0.1.0"
+description = "Daemon that fetches forecast data from SmartMet Server OGC EDR API and loads it into SmartMet Verify"
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg2-binary==2.9.12",
+    "requests==2.33.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--cov=smartmet_verify_model_data_loader"
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+fail_under = 80
+omit = ["*/__main__.py"]
+
+[tool.mypy]
+strict = true
+mypy_path = "src"
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "N", "RUF", "PERF", "PTH", "A", "PIE"]
+
+[tool.pylint.main]
+source-roots = ["src"]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.design]
+max-args = 8
+max-locals = 20
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+]
