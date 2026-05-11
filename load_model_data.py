@@ -29,12 +29,11 @@ signal.signal(signal.SIGINT, lambda s, f: _stop.set())
 @dataclass(frozen=True)
 class Config:
     server_url: str
-    smartmet_producer: str
+    edr_collection: str
     verif_producer: str
     parameters: str
     stationgroup: Optional[str]
     station: Optional[str]
-    timestep: str
     run_interval: int
     verbose: bool
     dry_run: bool
@@ -58,7 +57,7 @@ def load_config() -> Config:
         return os.environ.get(name, default).strip()
 
     server_url = require("SMARTMET_SERVER_URL").rstrip("/")
-    smartmet_producer = require("SMARTMET_PRODUCER")
+    edr_collection = require("EDR_COLLECTION")
     verif_producer = require("VERIF_PRODUCER")
     parameters = require("SMARTMET_PARAMETERS")
     db_user = require("VERIFIMPORT_USER")
@@ -90,12 +89,11 @@ def load_config() -> Config:
 
     return Config(
         server_url=server_url,
-        smartmet_producer=smartmet_producer,
+        edr_collection=edr_collection,
         verif_producer=verif_producer,
         parameters=parameters,
         stationgroup=stationgroup,
         station=station,
-        timestep=optional("SMARTMET_TIMESTEP", "data"),
         run_interval=run_interval,
         verbose=optional("VERBOSE").lower() in ("1", "true", "yes"),
         dry_run=optional("DRY_RUN").lower() in ("1", "true", "yes"),
@@ -119,7 +117,7 @@ def connect_db(cfg: Config):
     return conn
 
 
-def validate_params(cfg: Config, cur):
+def validate_params(cfg: Config, cur) -> list:
     params = []
     for orig in cfg.parameters.split(","):
         name = orig[:-4] if orig.endswith(".raw") else orig
@@ -133,13 +131,13 @@ def validate_params(cfg: Config, cur):
         else:
             if cfg.verbose:
                 log.info("%s -> id %d", name, row[0])
-            params.append({"verif_name": name, "verif_id": row[0], "smartmet_name": orig})
+            params.append({"verif_name": name, "verif_id": row[0], "edr_name": orig})
     if not params:
         raise RuntimeError("No valid parameters found")
     return params
 
 
-def get_stations(cfg: Config, cur):
+def get_stations(cfg: Config, cur) -> list:
     if cfg.stationgroup:
         arglist = tuple(cfg.stationgroup.split(","))
         query = """SELECT l.fmisid, l.name, st_x(l.geom), st_y(l.geom)
@@ -168,29 +166,52 @@ def get_producer_id(cur, name: str) -> int:
     return row[0]
 
 
-def fetch_forecasts(cfg: Config, stations, params):
-    param_str = ",".join(p["smartmet_name"] for p in params)
-    base_url = (
-        f"{cfg.server_url}/timeseries"
-        f"?format=json&timeformat=timestamp&precision=double"
-        f"&tz=utc&starttime=data&endtime=data&timestep={cfg.timestep}"
-        f"&who=smartmet-verif"
+def get_loaded_analysis_times(cur, producer_id: int) -> set:
+    cur.execute("SELECT analysis_time FROM forecasts WHERE producer_id = %s", (producer_id,))
+    # Strip timezone from timestamptz results; all times are UTC throughout
+    return {row[0].replace(tzinfo=None) for row in cur.fetchall()}
+
+
+def get_instances(cfg: Config, session: requests.Session) -> list:
+    url = f"{cfg.server_url}/edr/collections/{cfg.edr_collection}/instances"
+    r = session.get(url)
+    r.raise_for_status()
+    instances = []
+    for inst in r.json().get("instances", []):
+        interval = inst["extent"]["temporal"]["interval"][0]
+        instances.append({"id": inst["id"], "start": interval[0], "end": interval[1]})
+    instances.sort(key=lambda x: x["id"])  # oldest first → chronological backfill
+    return instances
+
+
+def parse_instance_id(instance_id: str) -> datetime:
+    return datetime.strptime(instance_id, "%Y%m%dT%H%M%S")
+
+
+def fetch_instance_data(
+    cfg: Config, session: requests.Session, instance: dict, stations: list, params: list
+) -> dict:
+    """Fetch CoverageJSON for every station for one instance. Returns {fmisid: covjson}."""
+    param_str = ",".join(p["edr_name"].lower() for p in params)
+    url = (
+        f"{cfg.server_url}/edr/collections/{cfg.edr_collection}"
+        f"/instances/{instance['id']}/position"
     )
     data = {}
     for fmisid, name, lon, lat in stations:
         if cfg.verbose:
-            log.info("Station %d %s (%f,%f)", fmisid, name, lon, lat)
-        url = (
-            f"{base_url}&lonlat={lon},{lat}"
-            f"&param=origintime,time,{param_str}"
-            f"&producer={cfg.smartmet_producer}&origintime=latest"
-        )
+            log.info("  Station %d %s (%f,%f)", fmisid, name, lon, lat)
+        query_params = {
+            "coords": f"POINT({lon} {lat})",
+            "parameter-name": param_str,
+            "datetime": f"{instance['start']}/{instance['end']}",
+        }
         if cfg.dry_run:
-            log.info("URL: %s", url)
+            log.info("  GET %s params=%s", url, query_params)
             continue
-        r = requests.get(url)
-        if r.status_code != requests.codes.ok:
-            log.warning("HTTP %d for station %d", r.status_code, fmisid)
+        r = session.get(url, params=query_params)
+        if not r.ok:
+            log.warning("HTTP %d for station %d (instance %s)", r.status_code, fmisid, instance["id"])
             if r.status_code == 400:
                 continue
             raise RuntimeError(f"HTTP {r.status_code} fetching station {fmisid}")
@@ -201,31 +222,32 @@ def fetch_forecasts(cfg: Config, stations, params):
 _COPY_COLUMNS = ["producer_id", "target_id", "analysis_time", "parameter_id", "forecaster_id", "leadtime", "value"]
 
 
-def build_copy_buffer(producer_id: int, params, data):
+def build_copy_buffer(producer_id: int, params: list, instance: dict, data: dict):
+    analysis_time = parse_instance_id(instance["id"])
     rows = []
-    analysis_time = None
 
-    for fmisid, forecasts in data.items():
-        origin_dt = None
-        for forecast in forecasts:
-            if origin_dt is None:
-                origin_dt = datetime.strptime(str(forecast["origintime"]), "%Y%m%d%H%M")
-                if analysis_time is None:
-                    analysis_time = origin_dt
-            valid_dt = datetime.strptime(str(forecast["time"]), "%Y%m%d%H%M")
-            leadtime = math.floor((valid_dt - origin_dt).total_seconds() / 3600)
-            for p in params:
-                value = forecast.get(p["smartmet_name"])
-                if value in (None, "None", ""):
+    for fmisid, covjson in data.items():
+        times = [
+            datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")
+            for t in covjson["domain"]["axes"]["t"]["values"]
+        ]
+        for p in params:
+            key = p["edr_name"].lower()
+            if key not in covjson.get("ranges", {}):
+                continue
+            values = covjson["ranges"][key]["values"]
+            for valid_dt, value in zip(times, values):
+                if value is None:
                     continue
+                leadtime = math.floor((valid_dt - analysis_time).total_seconds() / 3600)
                 rows.append(
-                    f"{producer_id}\t{fmisid}\t{origin_dt}\t{p['verif_id']}\t\\N\t{leadtime}\t{value}"
+                    f"{producer_id}\t{fmisid}\t{analysis_time}\t{p['verif_id']}\t\\N\t{leadtime}\t{value}"
                 )
 
     return rows, analysis_time
 
 
-def load_to_db(cur, producer_id: int, producer_name: str, analysis_time, rows):
+def load_to_db(cur, producer_id: int, producer_name: str, analysis_time: datetime, rows: list):
     tablename = f"{producer_name}_forecasts"
 
     cur.execute(
@@ -257,7 +279,7 @@ def load_to_db(cur, producer_id: int, producer_name: str, analysis_time, rows):
             DO UPDATE SET forecaster_id = EXCLUDED.forecaster_id, value = EXCLUDED.value"""
         )
 
-    log.info("Loaded %d rows into %s", len(rows), tablename)
+    log.info("Loaded %d rows for instance %s", len(rows), analysis_time)
 
 
 def run_once(cfg: Config):
@@ -267,25 +289,38 @@ def run_once(cfg: Config):
         params = validate_params(cfg, cur)
         stations = get_stations(cfg, cur)
         producer_id = get_producer_id(cur, cfg.verif_producer)
+        loaded = get_loaded_analysis_times(cur, producer_id)
 
-        log.info("Fetching forecasts from %s", cfg.server_url)
-        data = fetch_forecasts(cfg, stations, params)
+        with requests.Session() as session:
+            instances = get_instances(cfg, session)
+            new_instances = [i for i in instances if parse_instance_id(i["id"]) not in loaded]
+            log.info(
+                "Instances: %d total, %d already loaded, %d to process",
+                len(instances), len(loaded), len(new_instances),
+            )
 
-        if not data:
-            log.warning("No data retrieved from SmartMet Server")
-            return
+            for instance in new_instances:
+                log.info("Processing instance %s", instance["id"])
+                data = fetch_instance_data(cfg, session, instance, stations, params)
 
-        rows, analysis_time = build_copy_buffer(producer_id, params, data)
+                if not data:
+                    log.warning("No data returned for instance %s", instance["id"])
+                    continue
 
-        if not rows:
-            log.warning("No valid data rows to load")
-            return
+                rows, analysis_time = build_copy_buffer(producer_id, params, instance, data)
 
-        if cfg.dry_run:
-            log.info("Dry run: would load %d rows for analysis time %s", len(rows), analysis_time)
-            return
+                if not rows:
+                    log.warning("No valid rows for instance %s", instance["id"])
+                    continue
 
-        load_to_db(cur, producer_id, cfg.verif_producer, analysis_time, rows)
+                if cfg.dry_run:
+                    log.info("Dry run: would load %d rows for instance %s", len(rows), instance["id"])
+                    continue
+
+                try:
+                    load_to_db(cur, producer_id, cfg.verif_producer, analysis_time, rows)
+                except Exception:
+                    log.exception("Failed to load instance %s", instance["id"])
     finally:
         conn.close()
 
@@ -293,8 +328,8 @@ def run_once(cfg: Config):
 def main():
     cfg = load_config()
     log.info(
-        "Starting: server=%s producer=%s interval=%ds",
-        cfg.server_url, cfg.verif_producer, cfg.run_interval,
+        "Starting: server=%s collection=%s producer=%s interval=%ds",
+        cfg.server_url, cfg.edr_collection, cfg.verif_producer, cfg.run_interval,
     )
 
     while not _stop.is_set():
