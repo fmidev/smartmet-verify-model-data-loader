@@ -122,6 +122,7 @@ def connect_db(cfg: Config) -> "psycopg2.connection":
         host=cfg.db_host,
         dbname=cfg.db_name,
         port=cfg.db_port,
+        options="-c timezone=UTC",
     )
     conn.autocommit = True
     return conn
