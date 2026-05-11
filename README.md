@@ -29,6 +29,8 @@ All configuration is via environment variables.
 | Variable | Default | Description |
 |---|---|---|
 | `RUN_INTERVAL` | `3600` | Seconds between runs |
+| `RETRY_COUNT` | `3` | Number of retries per instance on API failure or incomplete data |
+| `RETRY_DELAY` | `60` | Seconds to wait between retries |
 | `VERBOSE` | _(unset)_ | Set to `1`, `true`, or `yes` for verbose logging |
 | `DRY_RUN` | _(unset)_ | Set to `1`, `true`, or `yes` to log queries/URLs without writing to the database |
 | `HTTP_PROXY` / `HTTPS_PROXY` | _(unset)_ | Standard proxy env vars, forwarded to outbound HTTP requests |
