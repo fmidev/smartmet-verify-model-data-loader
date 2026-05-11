@@ -6,7 +6,7 @@ Each iteration queries the EDR instances endpoint to discover available model ru
 
 ## Configuration
 
-All configuration is via environment variables.
+All configuration is via environment variables. Copy `.env.template` to `.env` and fill in the values.
 
 ### Required
 
@@ -18,11 +18,11 @@ All configuration is via environment variables.
 | `SMARTMET_PARAMETERS` | Comma-separated parameter list (newbase names), e.g. `Temperature,WindSpeedMS` |
 | `SMARTMET_STATIONGROUP` | Station group name(s), comma-separated *(mutually exclusive with `SMARTMET_STATION`)* |
 | `SMARTMET_STATION` | Station FMISID(s), comma-separated *(mutually exclusive with `SMARTMET_STATIONGROUP`)* |
-| `VERIFIMPORT_USER` | Database user |
-| `VERIFIMPORT_PASSWORD` | Database password |
-| `VERIFIMPORT_HOST` | Database host |
-| `VERIFIMPORT_DBNAME` | Database name |
-| `VERIFIMPORT_PORT` | Database port |
+| `VERIFICATION_DB_USER` | Database user |
+| `VERIFICATION_DB_PASSWORD` | Database password |
+| `VERIFICATION_DB_HOST` | Database host |
+| `VERIFICATION_DB_NAME` | Database name |
+| `VERIFICATION_DB_PORT` | Database port |
 
 ### Optional
 
@@ -47,31 +47,85 @@ docker run \
   -e SMARTMET_PARAMETERS=Temperature,Pressure,Humidity,WindSpeedMS,WindDirection \
   -e SMARTMET_STATIONGROUP=synop_europe \
   -e RUN_INTERVAL=3600 \
-  -e VERIFIMPORT_USER=verifuser \
-  -e VERIFIMPORT_PASSWORD=secret \
-  -e VERIFIMPORT_HOST=localhost \
-  -e VERIFIMPORT_DBNAME=verifdb \
-  -e VERIFIMPORT_PORT=5432 \
+  -e VERIFICATION_DB_USER=verifuser \
+  -e VERIFICATION_DB_PASSWORD=secret \
+  -e VERIFICATION_DB_HOST=localhost \
+  -e VERIFICATION_DB_NAME=verifdb \
+  -e VERIFICATION_DB_PORT=5432 \
   smartmet-verify-model-data-loader
 ```
 
 The container responds to `SIGTERM` and `SIGINT` for clean shutdown.
 
-## Local development
+## Development
+
+### Prerequisites
+
+- Docker (recommended) or Python 3.14+
+
+### Running tests and linters via Docker Compose
 
 ```bash
-pip install -r requirements.txt
-
-export SMARTMET_SERVER_URL=https://smartmet.example.com
-export EDR_COLLECTION=gfs_surface
-export VERIF_PRODUCER=gfs
-export SMARTMET_PARAMETERS=Temperature,WindSpeedMS
-export SMARTMET_STATIONGROUP=synop_finland
-export VERIFIMPORT_USER=verifuser
-export VERIFIMPORT_PASSWORD=secret
-export VERIFIMPORT_HOST=localhost
-export VERIFIMPORT_DBNAME=verifdb
-export VERIFIMPORT_PORT=5432
-
-python3 load_model_data.py
+make test    # pytest with coverage (≥80% required)
+make lint    # ruff + mypy + pylint
+make fix     # auto-fix ruff formatting and safe lint fixes
+make audit   # pip-audit vulnerability scan
 ```
+
+Or directly via Docker Compose:
+
+```bash
+docker compose run --rm test
+docker compose run --rm lint
+```
+
+### Local setup (without Docker)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+
+pytest
+ruff check src tests
+mypy src
+pylint src
+bandit -c bandit.yaml -r src
+```
+
+### Pre-commit hooks
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Hooks run ruff, bandit, mypy, and pylint on every commit.
+
+### Running locally
+
+```bash
+cp .env.template .env
+# edit .env
+
+make run          # via Docker Compose (uses .env)
+# or
+python -m smartmet_verify_model_data_loader
+```
+
+## CI/CD
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `test` | push / PR | pytest + coverage |
+| `lint` | push / PR | ruff, mypy, pylint, bandit |
+| `audit` | push / PR / weekly | pip-audit vulnerability scan |
+| `publish` | version tag `X.Y.Z` | build and push OCI image |
+| `update-python-version` | weekly / manual | open PR when a new CPython patch is released |
+
+### Publishing a release
+
+1. Update `version` in `pyproject.toml`, commit, push.
+2. `git tag X.Y.Z && git push --tags`
+
+GitHub Actions validates the tag matches the `pyproject.toml` version, then builds and pushes the OCI image to `$IMAGE_REGISTRY/$IMAGE_REGISTRY_NAMESPACE/smartmet-verify-model-data-loader`.

@@ -1,9 +1,8 @@
 """Tests for I/O-dependent functions in _core, using mocks."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-import psycopg2
 import pytest
 import requests
 
@@ -20,30 +19,29 @@ from smartmet_verify_model_data_loader._core import (
     validate_params,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _cfg(**kwargs: object) -> Config:
-    defaults: dict[str, object] = dict(
-        server_url="https://smartmet.example.com",
-        edr_collection="gfs_surface",
-        verif_producer="gfs",
-        parameters="Temperature,WindSpeedMS",
-        stationgroup="synop_finland",
-        station=None,
-        run_interval=600,
-        retry_count=2,
-        retry_delay=1,
-        verbose=False,
-        dry_run=False,
-        db_user="user",
-        db_password="pass",
-        db_host="localhost",
-        db_name="verifdb",
-        db_port="5432",
-    )
+    defaults: dict[str, object] = {
+        "server_url": "https://smartmet.example.com",
+        "edr_collection": "gfs_surface",
+        "verif_producer": "gfs",
+        "parameters": "Temperature,WindSpeedMS",
+        "stationgroup": "synop_finland",
+        "station": None,
+        "run_interval": 600,
+        "retry_count": 2,
+        "retry_delay": 1,
+        "verbose": False,
+        "dry_run": False,
+        "db_user": "user",
+        "db_password": "pass",
+        "db_host": "localhost",
+        "db_name": "verifdb",
+        "db_port": "5432",
+    }
     defaults.update(kwargs)
     return Config(**defaults)  # type: ignore[arg-type]
 
@@ -66,11 +64,11 @@ _BASE_ENV = {
     "VERIF_PRODUCER": "gfs",
     "SMARTMET_PARAMETERS": "Temperature",
     "SMARTMET_STATIONGROUP": "synop",
-    "VERIFIMPORT_USER": "u",
-    "VERIFIMPORT_PASSWORD": "p",
-    "VERIFIMPORT_HOST": "h",
-    "VERIFIMPORT_DBNAME": "db",
-    "VERIFIMPORT_PORT": "5432",
+    "VERIFICATION_DB_USER": "u",
+    "VERIFICATION_DB_PASSWORD": "p",
+    "VERIFICATION_DB_HOST": "h",
+    "VERIFICATION_DB_NAME": "db",
+    "VERIFICATION_DB_PORT": "5432",
 }
 
 
@@ -112,33 +110,28 @@ class TestLoadConfig:
         assert cfg.retry_delay == 30
 
     def test_missing_required_exits(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(SystemExit):
-                load_config()
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(SystemExit):
+            load_config()
 
     def test_both_station_and_stationgroup_exits(self) -> None:
         env = {**_BASE_ENV, "SMARTMET_STATION": "101004"}
-        with patch.dict("os.environ", env, clear=True):
-            with pytest.raises(SystemExit):
-                load_config()
+        with patch.dict("os.environ", env, clear=True), pytest.raises(SystemExit):
+            load_config()
 
     def test_neither_station_nor_stationgroup_exits(self) -> None:
         env = {k: v for k, v in _BASE_ENV.items() if k != "SMARTMET_STATIONGROUP"}
-        with patch.dict("os.environ", env, clear=True):
-            with pytest.raises(SystemExit):
-                load_config()
+        with patch.dict("os.environ", env, clear=True), pytest.raises(SystemExit):
+            load_config()
 
     def test_invalid_run_interval_exits(self) -> None:
         env = {**_BASE_ENV, "RUN_INTERVAL": "abc"}
-        with patch.dict("os.environ", env, clear=True):
-            with pytest.raises(SystemExit):
-                load_config()
+        with patch.dict("os.environ", env, clear=True), pytest.raises(SystemExit):
+            load_config()
 
     def test_zero_run_interval_exits(self) -> None:
         env = {**_BASE_ENV, "RUN_INTERVAL": "0"}
-        with patch.dict("os.environ", env, clear=True):
-            with pytest.raises(SystemExit):
-                load_config()
+        with patch.dict("os.environ", env, clear=True), pytest.raises(SystemExit):
+            load_config()
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +226,7 @@ class TestGetProducerId:
 
 class TestGetLoadedAnalysisTimes:
     def test_returns_naive_datetimes(self) -> None:
-        from datetime import timezone
-        ts = datetime(2026, 5, 11, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 5, 11, 0, 0, tzinfo=UTC)
         cur = _cursor([(ts,)])
         result = get_loaded_analysis_times(cur, 14)
         assert datetime(2026, 5, 11, 0, 0) in result
@@ -247,6 +239,10 @@ class TestGetLoadedAnalysisTimes:
 # ---------------------------------------------------------------------------
 # get_instances
 # ---------------------------------------------------------------------------
+
+def _extent(start: str, end: str) -> dict[str, object]:
+    return {"temporal": {"interval": [[start, end]]}}
+
 
 class TestGetInstances:
     def _session(self, instances: list[dict[str, object]]) -> MagicMock:
@@ -261,7 +257,7 @@ class TestGetInstances:
         inst = [{
             "id": "20260511T060000",
             "title": "",
-            "extent": {"temporal": {"interval": [["2026-05-11T06:00:00Z", "2026-05-21T06:00:00Z"]]}},
+            "extent": _extent("2026-05-11T06:00:00Z", "2026-05-21T06:00:00Z"),
         }]
         result = get_instances(cfg, self._session(inst))
         assert len(result) == 1
@@ -273,12 +269,12 @@ class TestGetInstances:
             {
                 "id": "20260511T060000",
                 "title": "",
-                "extent": {"temporal": {"interval": [["2026-05-11T06:00:00Z", "2026-05-21T06:00:00Z"]]}},
+                "extent": _extent("2026-05-11T06:00:00Z", "2026-05-21T06:00:00Z"),
             },
             {
                 "id": "20260510T060000",
                 "title": "",
-                "extent": {"temporal": {"interval": [["2026-05-10T06:00:00Z", "2026-05-20T06:00:00Z"]]}},
+                "extent": _extent("2026-05-10T06:00:00Z", "2026-05-20T06:00:00Z"),
             },
         ]
         result = get_instances(cfg, self._session(insts))
@@ -291,7 +287,7 @@ class TestGetInstances:
         inst = [{
             "id": "20260511T000000",
             "title": title,
-            "extent": {"temporal": {"interval": [["2026-05-11T00:00:00Z", "2026-05-11T06:00:00Z"]]}},
+            "extent": _extent("2026-05-11T00:00:00Z", "2026-05-11T06:00:00Z"),
         }]
         result = get_instances(cfg, self._session(inst))
         assert result[0]["expected_steps"] == 7
@@ -310,30 +306,33 @@ class TestGetInstances:
 # fetch_instance_data
 # ---------------------------------------------------------------------------
 
-class TestFetchInstanceData:
-    def _covjson(self) -> dict[str, object]:
-        return {
-            "domain": {"axes": {"t": {"values": ["2026-05-11T00:00:00Z"]}}},
-            "ranges": {"temperature": {"values": [15.0]}},
-        }
+def _covjson() -> dict[str, object]:
+    return {
+        "domain": {"axes": {"t": {"values": ["2026-05-11T00:00:00Z"]}}},
+        "ranges": {"temperature": {"values": [15.0]}},
+    }
 
+
+_INSTANCE: dict[str, object] = {
+    "id": "20260511T000000",
+    "start": "2026-05-11T00:00:00Z",
+    "end": "2026-05-21T00:00:00Z",
+}
+_PARAMS: list[dict[str, object]] = [
+    {"verif_name": "Temperature", "verif_id": 1, "edr_name": "Temperature"}
+]
+_STATIONS: list[tuple[object, ...]] = [(101001, "Helsinki", 25.0, 60.0)]
+
+
+class TestFetchInstanceData:
     def test_successful_fetch(self) -> None:
         cfg = _cfg()
         resp = MagicMock()
         resp.ok = True
-        resp.json.return_value = self._covjson()
+        resp.json.return_value = _covjson()
         session = MagicMock()
         session.get.return_value = resp
-        instance: dict[str, object] = {
-            "id": "20260511T000000",
-            "start": "2026-05-11T00:00:00Z",
-            "end": "2026-05-21T00:00:00Z",
-        }
-        params: list[dict[str, object]] = [
-            {"verif_name": "Temperature", "verif_id": 1, "edr_name": "Temperature"}
-        ]
-        stations: list[tuple[object, ...]] = [(101001, "Helsinki", 25.0, 60.0)]
-        result = fetch_instance_data(cfg, session, instance, stations, params)
+        result = fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         assert 101001 in result
 
     def test_400_skips_station(self) -> None:
@@ -343,16 +342,7 @@ class TestFetchInstanceData:
         resp.status_code = 400
         session = MagicMock()
         session.get.return_value = resp
-        instance: dict[str, object] = {
-            "id": "20260511T000000",
-            "start": "2026-05-11T00:00:00Z",
-            "end": "2026-05-21T00:00:00Z",
-        }
-        params: list[dict[str, object]] = [
-            {"verif_name": "Temperature", "verif_id": 1, "edr_name": "Temperature"}
-        ]
-        stations: list[tuple[object, ...]] = [(101001, "Helsinki", 25.0, 60.0)]
-        result = fetch_instance_data(cfg, session, instance, stations, params)
+        result = fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         assert result == {}
 
     def test_non_400_error_raises(self) -> None:
@@ -362,31 +352,13 @@ class TestFetchInstanceData:
         resp.status_code = 503
         session = MagicMock()
         session.get.return_value = resp
-        instance: dict[str, object] = {
-            "id": "20260511T000000",
-            "start": "2026-05-11T00:00:00Z",
-            "end": "2026-05-21T00:00:00Z",
-        }
-        params: list[dict[str, object]] = [
-            {"verif_name": "Temperature", "verif_id": 1, "edr_name": "Temperature"}
-        ]
-        stations: list[tuple[object, ...]] = [(101001, "Helsinki", 25.0, 60.0)]
         with pytest.raises(RuntimeError, match="HTTP 503"):
-            fetch_instance_data(cfg, session, instance, stations, params)
+            fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
 
     def test_dry_run_skips_request(self) -> None:
         cfg = _cfg(dry_run=True)
         session = MagicMock()
-        instance: dict[str, object] = {
-            "id": "20260511T000000",
-            "start": "2026-05-11T00:00:00Z",
-            "end": "2026-05-21T00:00:00Z",
-        }
-        params: list[dict[str, object]] = [
-            {"verif_name": "Temperature", "verif_id": 1, "edr_name": "Temperature"}
-        ]
-        stations: list[tuple[object, ...]] = [(101001, "Helsinki", 25.0, 60.0)]
-        result = fetch_instance_data(cfg, session, instance, stations, params)
+        result = fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         session.get.assert_not_called()
         assert result == {}
 
@@ -394,19 +366,10 @@ class TestFetchInstanceData:
         cfg = _cfg(verbose=True)
         resp = MagicMock()
         resp.ok = True
-        resp.json.return_value = self._covjson()
+        resp.json.return_value = _covjson()
         session = MagicMock()
         session.get.return_value = resp
-        instance: dict[str, object] = {
-            "id": "20260511T000000",
-            "start": "2026-05-11T00:00:00Z",
-            "end": "2026-05-21T00:00:00Z",
-        }
-        params: list[dict[str, object]] = [
-            {"verif_name": "Temperature", "verif_id": 1, "edr_name": "Temperature"}
-        ]
-        stations: list[tuple[object, ...]] = [(101001, "Helsinki", 25.0, 60.0)]
-        result = fetch_instance_data(cfg, session, instance, stations, params)
+        result = fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         assert 101001 in result
 
 
@@ -414,87 +377,84 @@ class TestFetchInstanceData:
 # fetch_with_retry
 # ---------------------------------------------------------------------------
 
+def _complete_data() -> dict[object, object]:
+    return {
+        101001: {
+            "domain": {"axes": {"t": {"values": [
+                "2026-05-11T00:00:00Z", "2026-05-11T01:00:00Z",
+            ]}}},
+            "ranges": {},
+        }
+    }
+
+
 class TestFetchWithRetry:
-    def _instance(self) -> dict[str, object]:
-        return {
-            "id": "20260511T000000",
-            "start": "2026-05-11T00:00:00Z",
-            "end": "2026-05-21T00:00:00Z",
-            "expected_steps": None,
-        }
-
-    def _complete_data(self) -> dict[object, object]:
-        return {
-            101001: {
-                "domain": {"axes": {"t": {"values": ["2026-05-11T00:00:00Z", "2026-05-11T01:00:00Z"]}}},
-                "ranges": {},
-            }
-        }
-
     def test_success_on_first_attempt(self) -> None:
         cfg = _cfg(retry_count=2)
-        params: list[dict[str, object]] = []
-        stations: list[tuple[object, ...]] = []
         session = MagicMock()
         with patch(
             "smartmet_verify_model_data_loader._core.fetch_instance_data",
-            return_value=self._complete_data(),
+            return_value=_complete_data(),
         ):
-            result = fetch_with_retry(cfg, session, self._instance(), stations, params)
+            result = fetch_with_retry(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         assert 101001 in result
 
     def test_retries_on_exception(self) -> None:
         cfg = _cfg(retry_count=2, retry_delay=0)
-        params: list[dict[str, object]] = []
-        stations: list[tuple[object, ...]] = []
         session = MagicMock()
-        side_effects = [RuntimeError("fail"), RuntimeError("fail"), self._complete_data()]
-        with patch(
-            "smartmet_verify_model_data_loader._core.fetch_instance_data",
-            side_effect=side_effects,
-        ), patch("smartmet_verify_model_data_loader._core._stop") as mock_stop:
+        side_effects = [RuntimeError("fail"), RuntimeError("fail"), _complete_data()]
+        with (
+            patch(
+                "smartmet_verify_model_data_loader._core.fetch_instance_data",
+                side_effect=side_effects,
+            ),
+            patch("smartmet_verify_model_data_loader._core._stop") as mock_stop,
+        ):
             mock_stop.wait.return_value = False
-            result = fetch_with_retry(cfg, session, self._instance(), stations, params)
+            result = fetch_with_retry(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         assert 101001 in result
 
     def test_raises_after_all_retries_exhausted(self) -> None:
         cfg = _cfg(retry_count=1, retry_delay=0)
-        params: list[dict[str, object]] = []
-        stations: list[tuple[object, ...]] = []
         session = MagicMock()
-        with patch(
-            "smartmet_verify_model_data_loader._core.fetch_instance_data",
-            side_effect=RuntimeError("persistent fail"),
-        ), patch("smartmet_verify_model_data_loader._core._stop") as mock_stop:
+        with (
+            patch(
+                "smartmet_verify_model_data_loader._core.fetch_instance_data",
+                side_effect=RuntimeError("persistent fail"),
+            ),
+            patch("smartmet_verify_model_data_loader._core._stop") as mock_stop,
+        ):
             mock_stop.wait.return_value = False
             with pytest.raises(RuntimeError, match="persistent fail"):
-                fetch_with_retry(cfg, session, self._instance(), stations, params)
+                fetch_with_retry(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
 
     def test_stop_event_breaks_retry_loop(self) -> None:
         cfg = _cfg(retry_count=3, retry_delay=1)
-        params: list[dict[str, object]] = []
-        stations: list[tuple[object, ...]] = []
         session = MagicMock()
-        with patch(
-            "smartmet_verify_model_data_loader._core.fetch_instance_data",
-            side_effect=RuntimeError("fail"),
-        ), patch("smartmet_verify_model_data_loader._core._stop") as mock_stop:
+        with (
+            patch(
+                "smartmet_verify_model_data_loader._core.fetch_instance_data",
+                side_effect=RuntimeError("fail"),
+            ),
+            patch("smartmet_verify_model_data_loader._core._stop") as mock_stop,
+        ):
             mock_stop.wait.return_value = True  # stop requested
             with pytest.raises(RuntimeError):
-                fetch_with_retry(cfg, session, self._instance(), stations, params)
+                fetch_with_retry(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
 
 
 # ---------------------------------------------------------------------------
 # load_to_db
 # ---------------------------------------------------------------------------
 
-class TestLoadToDb:
-    def _rows(self) -> list[str]:
-        return ["14\t101001\t2026-05-11 00:00:00\t1\t\\N\t0\t15.0"]
+def _rows() -> list[str]:
+    return ["14\t101001\t2026-05-11 00:00:00\t1\t\\N\t0\t15.0"]
 
+
+class TestLoadToDb:
     def test_copy_success(self) -> None:
         cur = MagicMock()
-        load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), self._rows())
+        load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), _rows())
         cur.copy_from.assert_called_once()
         assert cur.execute.call_count == 1  # forecasts INSERT
 
@@ -505,7 +465,7 @@ class TestLoadToDb:
         cur = MagicMock()
         cur.copy_from.side_effect = [_DupKeyError(), None]
         with patch("smartmet_verify_model_data_loader._core.psycopg2.IntegrityError", _DupKeyError):
-            load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), self._rows())
+            load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), _rows())
         assert cur.copy_from.call_count == 2  # first attempt + temp_load
         assert cur.execute.call_count == 3  # forecasts INSERT + CREATE TEMP + INSERT SELECT
 
@@ -515,6 +475,8 @@ class TestLoadToDb:
 
         cur = MagicMock()
         cur.copy_from.side_effect = _FKError()
-        with patch("smartmet_verify_model_data_loader._core.psycopg2.IntegrityError", _FKError):
-            with pytest.raises(_FKError):
-                load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), self._rows())
+        with (
+            patch("smartmet_verify_model_data_loader._core.psycopg2.IntegrityError", _FKError),
+            pytest.raises(_FKError),
+        ):
+            load_to_db(cur, 14, "gfs", datetime(2026, 5, 11), _rows())

@@ -62,11 +62,11 @@ def load_config() -> Config:
     edr_collection = require("EDR_COLLECTION")
     verif_producer = require("VERIF_PRODUCER")
     parameters = require("SMARTMET_PARAMETERS")
-    db_user = require("VERIFIMPORT_USER")
-    db_password = require("VERIFIMPORT_PASSWORD")
-    db_host = require("VERIFIMPORT_HOST")
-    db_name = require("VERIFIMPORT_DBNAME")
-    db_port = require("VERIFIMPORT_PORT")
+    db_user = require("VERIFICATION_DB_USER")
+    db_password = require("VERIFICATION_DB_PASSWORD")
+    db_host = require("VERIFICATION_DB_HOST")
+    db_name = require("VERIFICATION_DB_NAME")
+    db_port = require("VERIFICATION_DB_PORT")
 
     stationgroup = optional("SMARTMET_STATIONGROUP") or None
     station = optional("SMARTMET_STATION") or None
@@ -273,7 +273,8 @@ def _check_completeness(
     expected = instance.get("expected_steps")
 
     for fmisid, covjson in data.items():
-        assert isinstance(covjson, dict)
+        if not isinstance(covjson, dict):
+            continue
         t_values: list[str] = covjson["domain"]["axes"]["t"]["values"]
         actual = len(t_values)
 
@@ -348,7 +349,8 @@ def build_copy_buffer(
     rows: list[str] = []
 
     for fmisid, covjson in data.items():
-        assert isinstance(covjson, dict)
+        if not isinstance(covjson, dict):
+            continue
         times = [
             datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")
             for t in covjson["domain"]["axes"]["t"]["values"]
@@ -402,7 +404,7 @@ def load_to_db(
         buf.seek(0)
         cur.copy_from(buf, "temp_load", columns=_COPY_COLUMNS)
         cur.execute(
-            f"INSERT INTO {tablename} "
+            f"INSERT INTO {tablename} "  # nosec B608
             "(producer_id, analysis_time, target_id, parameter_id, "
             "forecaster_id, leadtime, value) "
             "SELECT producer_id, analysis_time, target_id, parameter_id, "
