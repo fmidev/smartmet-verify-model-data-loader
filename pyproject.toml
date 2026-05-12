@@ -5,7 +5,7 @@ description = "Daemon that fetches forecast data from SmartMet Server OGC EDR AP
 requires-python = ">=3.12"
 dependencies = [
     "psycopg2-binary==2.9.12",
-    "requests==2.33.1",
+    "requests==2.34.0",
 ]
 
 [tool.pytest.ini_options]
