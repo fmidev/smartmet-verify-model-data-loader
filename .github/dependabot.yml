@@ -1,4 +1,7 @@
 version: 2
+# Docker is intentionally omitted: both Dockerfiles use `FROM python:${PYTHON_VERSION}-slim`
+# where the tag is an ARG variable, so Dependabot cannot resolve it. Python version updates
+# are handled atomically by the update-python-version workflow instead.
 updates:
   - package-ecosystem: github-actions
     directory: /
