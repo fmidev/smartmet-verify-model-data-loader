@@ -1,5 +1,6 @@
 """Tests for I/O-dependent functions in _core, using mocks."""
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -47,7 +48,7 @@ def _cfg(**kwargs: object) -> Config:
     return Config(**defaults)  # type: ignore[arg-type]
 
 
-def _cursor(rows: list[tuple[object, ...]] | None = None) -> MagicMock:
+def _cursor(rows: Sequence[tuple[object, ...]] | None = None) -> MagicMock:
     cur = MagicMock()
     cur.fetchone.return_value = rows[0] if rows else None
     cur.fetchall.return_value = rows or []
@@ -250,7 +251,7 @@ def _extent(start: str, end: str) -> dict[str, object]:
 
 
 class TestGetInstances:
-    def _session(self, instances: list[dict[str, object]]) -> MagicMock:
+    def _session(self, instances: Sequence[Mapping[str, object]]) -> MagicMock:
         resp = MagicMock()
         resp.json.return_value = {"instances": instances}
         session = MagicMock()
@@ -353,7 +354,7 @@ class TestFetchInstanceData:
         session = MagicMock()
         session.get.return_value = resp
         result = fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
-        assert result == {}
+        assert not result
 
     def test_non_400_error_raises(self) -> None:
         cfg = _cfg()
@@ -370,7 +371,7 @@ class TestFetchInstanceData:
         session = MagicMock()
         result = fetch_instance_data(cfg, session, _INSTANCE, _STATIONS, _PARAMS)
         session.get.assert_not_called()
-        assert result == {}
+        assert not result
 
     def test_verbose_logs_station(self) -> None:
         cfg = _cfg(verbose=True)
