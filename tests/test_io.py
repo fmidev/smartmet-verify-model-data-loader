@@ -23,6 +23,7 @@ from smartmet_verify_model_data_loader._core import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _cfg(**kwargs: object) -> Config:
     defaults: dict[str, object] = {
         "server_url": "https://smartmet.example.com",
@@ -138,6 +139,7 @@ class TestLoadConfig:
 # validate_params
 # ---------------------------------------------------------------------------
 
+
 class TestValidateParams:
     def test_known_param(self) -> None:
         cur = _cursor([(1,)])
@@ -180,6 +182,7 @@ class TestValidateParams:
 # get_stations
 # ---------------------------------------------------------------------------
 
+
 class TestGetStations:
     def test_by_stationgroup(self) -> None:
         cfg = _cfg(stationgroup="synop_finland", station=None)
@@ -213,6 +216,7 @@ class TestGetStations:
 # get_producer_id / get_loaded_analysis_times
 # ---------------------------------------------------------------------------
 
+
 class TestGetProducerId:
     def test_found(self) -> None:
         cur = _cursor([(14,)])
@@ -240,6 +244,7 @@ class TestGetLoadedAnalysisTimes:
 # get_instances
 # ---------------------------------------------------------------------------
 
+
 def _extent(start: str, end: str) -> dict[str, object]:
     return {"temporal": {"interval": [[start, end]]}}
 
@@ -254,11 +259,13 @@ class TestGetInstances:
 
     def test_basic(self) -> None:
         cfg = _cfg()
-        inst = [{
-            "id": "20260511T060000",
-            "title": "",
-            "extent": _extent("2026-05-11T06:00:00Z", "2026-05-21T06:00:00Z"),
-        }]
+        inst = [
+            {
+                "id": "20260511T060000",
+                "title": "",
+                "extent": _extent("2026-05-11T06:00:00Z", "2026-05-21T06:00:00Z"),
+            }
+        ]
         result = get_instances(cfg, self._session(inst))
         assert len(result) == 1
         assert result[0]["id"] == "20260511T060000"
@@ -284,11 +291,13 @@ class TestGetInstances:
     def test_with_title_expected_steps(self) -> None:
         cfg = _cfg()
         title = "Starttime: 2026-05-11T00:00:00Z Endtime: 2026-05-11T06:00:00Z Timestep: 60"
-        inst = [{
-            "id": "20260511T000000",
-            "title": title,
-            "extent": _extent("2026-05-11T00:00:00Z", "2026-05-11T06:00:00Z"),
-        }]
+        inst = [
+            {
+                "id": "20260511T000000",
+                "title": title,
+                "extent": _extent("2026-05-11T00:00:00Z", "2026-05-11T06:00:00Z"),
+            }
+        ]
         result = get_instances(cfg, self._session(inst))
         assert result[0]["expected_steps"] == 7
 
@@ -305,6 +314,7 @@ class TestGetInstances:
 # ---------------------------------------------------------------------------
 # fetch_instance_data
 # ---------------------------------------------------------------------------
+
 
 def _covjson() -> dict[str, object]:
     return {
@@ -377,12 +387,20 @@ class TestFetchInstanceData:
 # fetch_with_retry
 # ---------------------------------------------------------------------------
 
+
 def _complete_data() -> dict[object, object]:
     return {
         101001: {
-            "domain": {"axes": {"t": {"values": [
-                "2026-05-11T00:00:00Z", "2026-05-11T01:00:00Z",
-            ]}}},
+            "domain": {
+                "axes": {
+                    "t": {
+                        "values": [
+                            "2026-05-11T00:00:00Z",
+                            "2026-05-11T01:00:00Z",
+                        ]
+                    }
+                }
+            },
             "ranges": {},
         }
     }
@@ -446,6 +464,7 @@ class TestFetchWithRetry:
 # ---------------------------------------------------------------------------
 # load_to_db
 # ---------------------------------------------------------------------------
+
 
 def _rows() -> list[str]:
     return ["14\t101001\t2026-05-11 00:00:00\t1\t\\N\t0\t15.0"]

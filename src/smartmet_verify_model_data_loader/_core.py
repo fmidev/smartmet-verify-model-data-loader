@@ -209,12 +209,14 @@ def get_instances(cfg: Config, session: requests.Session) -> list[dict[str, obje
     instances: list[dict[str, object]] = []
     for inst in r.json().get("instances", []):
         interval = inst["extent"]["temporal"]["interval"][0]
-        instances.append({
-            "id": inst["id"],
-            "start": interval[0],
-            "end": interval[1],
-            "expected_steps": _parse_expected_steps(inst.get("title", "")),
-        })
+        instances.append(
+            {
+                "id": inst["id"],
+                "start": interval[0],
+                "end": interval[1],
+                "expected_steps": _parse_expected_steps(inst.get("title", "")),
+            }
+        )
     instances.sort(key=lambda x: str(x["id"]))  # oldest first → chronological backfill
     return instances
 
@@ -233,8 +235,7 @@ def fetch_instance_data(
     """Fetch CoverageJSON for every station for one instance. Returns {fmisid: covjson}."""
     param_str = ",".join(str(p["edr_name"]).lower() for p in params)
     url = (
-        f"{cfg.server_url}/edr/collections/{cfg.edr_collection}"
-        f"/instances/{instance['id']}/position"
+        f"{cfg.server_url}/edr/collections/{cfg.edr_collection}/instances/{instance['id']}/position"
     )
     data: dict[object, object] = {}
     for fmisid, name, lon, lat in stations:
@@ -253,7 +254,9 @@ def fetch_instance_data(
         if not r.ok:
             log.warning(
                 "HTTP %d for station %s (instance %s)",
-                r.status_code, fmisid, instance["id"],
+                r.status_code,
+                fmisid,
+                instance["id"],
             )
             if r.status_code == 400:
                 continue
@@ -262,9 +265,7 @@ def fetch_instance_data(
     return data
 
 
-def _check_completeness(
-    instance: dict[str, object], data: dict[object, object]
-) -> str | None:
+def _check_completeness(instance: dict[str, object], data: dict[object, object]) -> str | None:
     """Return a description of the problem if data is incomplete, else None.
 
     Completeness is checked two ways:
@@ -306,7 +307,10 @@ def fetch_with_retry(
         if attempt > 0:
             log.info(
                 "Retry %d/%d for instance %s in %ds",
-                attempt, cfg.retry_count, instance["id"], cfg.retry_delay,
+                attempt,
+                cfg.retry_count,
+                instance["id"],
+                cfg.retry_delay,
             )
             if _stop.wait(timeout=cfg.retry_delay):
                 break  # shutdown requested during wait
@@ -317,7 +321,10 @@ def fetch_with_retry(
             last_exc = e
             log.warning(
                 "Fetch error for instance %s (attempt %d/%d): %s",
-                instance["id"], attempt + 1, cfg.retry_count + 1, e,
+                instance["id"],
+                attempt + 1,
+                cfg.retry_count + 1,
+                e,
             )
             continue
 
@@ -328,15 +335,23 @@ def fetch_with_retry(
         last_exc = RuntimeError(f"Incomplete data: {reason}")
         log.warning(
             "Incomplete data for instance %s (attempt %d/%d): %s",
-            instance["id"], attempt + 1, cfg.retry_count + 1, reason,
+            instance["id"],
+            attempt + 1,
+            cfg.retry_count + 1,
+            reason,
         )
 
     raise last_exc or RuntimeError(f"Failed to fetch instance {instance['id']}")
 
 
 _COPY_COLUMNS = [
-    "producer_id", "target_id", "analysis_time",
-    "parameter_id", "forecaster_id", "leadtime", "value",
+    "producer_id",
+    "target_id",
+    "analysis_time",
+    "parameter_id",
+    "forecaster_id",
+    "leadtime",
+    "value",
 ]
 
 
@@ -431,7 +446,9 @@ def run_once(cfg: Config) -> None:
             new_instances = [i for i in instances if parse_instance_id(str(i["id"])) not in loaded]
             log.info(
                 "Instances: %d total, %d already loaded, %d to process",
-                len(instances), len(loaded), len(new_instances),
+                len(instances),
+                len(loaded),
+                len(new_instances),
             )
 
             for instance in new_instances:
@@ -455,7 +472,8 @@ def run_once(cfg: Config) -> None:
                 if cfg.dry_run:
                     log.info(
                         "Dry run: would load %d rows for instance %s",
-                        len(rows), instance["id"],
+                        len(rows),
+                        instance["id"],
                     )
                     continue
 
@@ -471,7 +489,10 @@ def main() -> None:
     cfg = load_config()
     log.info(
         "Starting: server=%s collection=%s producer=%s interval=%ds",
-        cfg.server_url, cfg.edr_collection, cfg.verif_producer, cfg.run_interval,
+        cfg.server_url,
+        cfg.edr_collection,
+        cfg.verif_producer,
+        cfg.run_interval,
     )
 
     while not _stop.is_set():

@@ -67,9 +67,13 @@ class TestCheckCompleteness:
 
     def test_complete_with_expected(self) -> None:
         instance: dict[str, object] = {"expected_steps": 3}
-        data = self._station_data([
-            "2026-05-11T00:00:00Z", "2026-05-11T01:00:00Z", "2026-05-11T02:00:00Z",
-        ])
+        data = self._station_data(
+            [
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T01:00:00Z",
+                "2026-05-11T02:00:00Z",
+            ]
+        )
         assert _check_completeness(instance, data) is None
 
     def test_short_with_expected(self) -> None:
@@ -81,20 +85,24 @@ class TestCheckCompleteness:
 
     def test_no_gaps_without_expected(self) -> None:
         instance: dict[str, object] = {"expected_steps": None}
-        data = self._station_data([
-            "2026-05-11T00:00:00Z",
-            "2026-05-11T01:00:00Z",
-            "2026-05-11T02:00:00Z",
-        ])
+        data = self._station_data(
+            [
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T01:00:00Z",
+                "2026-05-11T02:00:00Z",
+            ]
+        )
         assert _check_completeness(instance, data) is None
 
     def test_gap_detected_without_expected(self) -> None:
         instance: dict[str, object] = {"expected_steps": None}
-        data = self._station_data([
-            "2026-05-11T00:00:00Z",
-            "2026-05-11T01:00:00Z",
-            "2026-05-11T03:00:00Z",  # 2h gap after 1h intervals
-        ])
+        data = self._station_data(
+            [
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T01:00:00Z",
+                "2026-05-11T03:00:00Z",  # 2h gap after 1h intervals
+            ]
+        )
         result = _check_completeness(instance, data)
         assert result is not None
         assert "gaps" in result
@@ -131,10 +139,10 @@ class TestBuildCopyBuffer:
         assert len(rows) == 3
         # leadtime 0 for first step
         fields = rows[0].split("\t")
-        assert fields[0] == "14"       # producer_id
-        assert fields[1] == "101001"   # fmisid
-        assert fields[5] == "0"        # leadtime
-        assert fields[6] == "15.0"     # value
+        assert fields[0] == "14"  # producer_id
+        assert fields[1] == "101001"  # fmisid
+        assert fields[5] == "0"  # leadtime
+        assert fields[6] == "15.0"  # value
         # leadtime 6 for last step
         assert rows[2].split("\t")[5] == "6"
 
