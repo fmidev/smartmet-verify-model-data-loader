@@ -1,9 +1,9 @@
 name: Lint
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
@@ -16,31 +16,35 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Python version
-        id: python-version
-        run: echo "version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ steps.python-version.outputs.version }}
+          python-version-file: .python-version
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Install linting tools and runtime dependencies
+        run: pip install --requirement requirements-dev.txt
 
-      - name: Add problem matchers
+      - name: ruff format
+        run: ruff format --check .
+
+      - name: ruff check
+        run: ruff check --output-format github .
+
+      - name: Register problem matchers
         run: |
+          echo "::add-matcher::.github/problem-matchers/bandit.json"
           echo "::add-matcher::.github/problem-matchers/mypy.json"
           echo "::add-matcher::.github/problem-matchers/pylint.json"
-          echo "::add-matcher::.github/problem-matchers/bandit.json"
-
-      - name: ruff
-        run: ruff check src tests
-
-      - name: mypy
-        run: mypy src
-
-      - name: pylint
-        run: pylint src
 
       - name: bandit
-        run: bandit -c bandit.yaml -r src
+        run: |
+          bandit -r src/ -c bandit.yaml -q -f custom --msg-template "{relpath}:{line}:{col}: {test_id}: {msg}"
+
+      - name: mypy
+        run: mypy src/ tests/
+
+      - name: pylint
+        run: PYTHONPATH=src pylint src/ tests/

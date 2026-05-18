@@ -1,9 +1,9 @@
 name: Test
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
@@ -16,16 +16,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Python version
-        id: python-version
-        run: echo "version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ steps.python-version.outputs.version }}
+          python-version-file: .python-version
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-dev.txt
+        run: pip install --requirement requirements-dev.txt
 
       - name: Run tests
-        run: pytest
+        run: python3 -m pytest --verbose

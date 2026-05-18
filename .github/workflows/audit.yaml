@@ -1,11 +1,10 @@
 name: Audit
 
 on:
-  push:
-    branches: [main]
   pull_request:
   schedule:
-    - cron: "30 8 * * 1"  # Mondays 08:30 UTC
+    - cron: '0 9 * * 1'  # At 09 UTC on Mondays
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,16 +17,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Python version
-        id: python-version
-        run: echo "version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ steps.python-version.outputs.version }}
+          python-version-file: .python-version
+          cache: 'pip'
+          cache-dependency-path: requirements-audit.txt
 
       - name: Install pip-audit
-        run: pip install -r requirements-audit.txt
+        run: pip install --requirement requirements-audit.txt
 
       - name: Audit dependencies
-        run: pip-audit -r requirements.txt
+        run: pip-audit --requirement requirements.txt --requirement requirements-dev.txt

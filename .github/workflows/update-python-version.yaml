@@ -1,70 +1,111 @@
-name: Update Python version
+name: Update Python Version
 
 on:
   schedule:
-    - cron: "0 8 * * 1"  # Mondays 08:00 UTC
+    - cron: '0 9 * * 1'  # Every Monday at 09:00 UTC
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write       # push branch
+  pull-requests: write  # open PR
+  issues: write         # gh label create requires this
 
 jobs:
-  update:
+  update-python-version:
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials is intentionally kept at its default (true) here —
+      # this workflow needs to push a branch, unlike other workflows that use false.
       - uses: actions/checkout@v6
-        with:
-          persist-credentials: true
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get latest CPython release
+      - name: Get latest stable Python version
         id: latest
         run: |
-          LATEST=$(curl -s https://endoflife.date/api/python.json \
-            | python3 -c "
+          latest=$(curl -fsSL https://endoflife.date/api/python.json | python3 -c "
           import json, sys
+          from datetime import date
+          today = date.today().isoformat()
           data = json.load(sys.stdin)
-          stable = [r for r in data if not r.get('eol')]
-          latest = max(stable, key=lambda r: r['latest'])
-          print(latest['latest'])
+          stable = [
+              c for c in data
+              if (c['eol'] is False or (isinstance(c['eol'], str) and c['eol'] > today))
+              and not any(p in c['latest'] for p in ('a', 'b', 'rc'))
+          ]
+          if not stable:
+              sys.exit('No stable Python versions found — check endoflife.date API response')
+          stable.sort(key=lambda c: [int(x) for x in c['latest'].split('.')], reverse=True)
+          print(stable[0]['latest'])
           ")
-          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
 
-      - name: Check if update needed
+      - name: Check if Docker image is available
+        id: docker
+        run: |
+          tag="${{ steps.latest.outputs.version }}-slim"
+          status=$(curl -o /dev/null -s -w "%{http_code}" \
+            "https://hub.docker.com/v2/repositories/library/python/tags/${tag}/")
+          if [ "$status" = "200" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Docker image python:${tag} not yet published (HTTP ${status}) — skipping update."
+          fi
+
+      - name: Check if update is needed
         id: check
         run: |
-          CURRENT=$(cat .python-version | tr -d '[:space:]')
-          LATEST="${{ steps.latest.outputs.version }}"
-          if [ "$CURRENT" = "$LATEST" ]; then
+          current=$(cat .python-version)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "${{ steps.latest.outputs.version }}" ]; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
-            echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Update .python-version and Dockerfile ARG
-        if: steps.check.outputs.needed == 'true'
+      - name: Update version references
+        if: steps.check.outputs.needed == 'true' && steps.docker.outputs.available == 'true'
         run: |
-          LATEST="${{ steps.latest.outputs.version }}"
-          echo "$LATEST" > .python-version
-          sed -i "s/^ARG PYTHON_VERSION=.*/ARG PYTHON_VERSION=$LATEST/" Dockerfile
-          sed -i "s/^ARG PYTHON_VERSION=.*/ARG PYTHON_VERSION=$LATEST/" Dockerfile.dev
+          new="${{ steps.latest.outputs.version }}"
+          old="${{ steps.check.outputs.current }}"
+          new_minor=$(echo "$new" | cut -d. -f1-2)
+          # Escape dots so they are treated as literals in sed, not as regex wildcards.
+          old_escaped="${old//./\\.}"
 
-      - name: Open PR
-        if: steps.check.outputs.needed == 'true'
+          echo "$new" > .python-version
+          sed -i "s/ARG PYTHON_VERSION=${old_escaped}/ARG PYTHON_VERSION=${new}/" Dockerfile
+          sed -i "s/ARG PYTHON_VERSION=${old_escaped}/ARG PYTHON_VERSION=${new}/" Dockerfile.dev
+          sed -i "s/requires-python = \">=.*/requires-python = \">=${new_minor}\"/" pyproject.toml
+
+      - name: Open pull request
+        if: steps.check.outputs.needed == 'true' && steps.docker.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="update-python-${{ steps.latest.outputs.version }}"
+          new="${{ steps.latest.outputs.version }}"
+          old="${{ steps.check.outputs.current }}"
+          branch="chore/python-${new}"
+
+          # Skip if a PR for this version was already opened.
+          if git ls-remote --exit-code origin "refs/heads/${branch}" > /dev/null 2>&1; then
+            echo "Branch ${branch} already exists — skipping."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add .python-version Dockerfile Dockerfile.dev
-          git commit -m "chore: update Python to ${{ steps.latest.outputs.version }}"
-          git push origin "$BRANCH"
+          git checkout -b "$branch"
+          git add .python-version Dockerfile Dockerfile.dev pyproject.toml
+          git commit -m "chore: update Python ${old} → ${new}"
+          git push origin "$branch"
+
+          # Create the 'dependencies' label if it does not exist yet.
+          gh label create dependencies --color 0075ca \
+            --description "Pull requests that update a dependency file" 2>/dev/null || true
+
+          body=$(printf \
+            "Python **%s** is now available (was **%s**).\n\nUpdated:\n- \`.python-version\`\n- \`Dockerfile\` (\`ARG PYTHON_VERSION\`)\n- \`Dockerfile.dev\` (\`ARG PYTHON_VERSION\`)\n- \`pyproject.toml\` (\`requires-python\`)\n\n> Opened automatically by the weekly Python version check." \
+            "$new" "$old")
           gh pr create \
-            --title "chore: update Python to ${{ steps.latest.outputs.version }}" \
-            --body "Automated update from ${{ steps.check.outputs.current }} to ${{ steps.latest.outputs.version }}." \
-            --base main \
-            --head "$BRANCH"
+            --title "chore: update Python ${old} → ${new}" \
+            --body "$body" \
+            --label dependencies
