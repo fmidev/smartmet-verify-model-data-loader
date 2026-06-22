@@ -16,7 +16,7 @@ jobs:
     steps:
       # persist-credentials is intentionally kept at its default (true) here —
       # this workflow needs to push a branch, unlike other workflows that use false.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.3
 
       - name: Get latest stable Python version
         id: latest
