@@ -27,7 +27,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6.2.0
         with:
           python-version-file: .python-version
           cache: 'pip'
