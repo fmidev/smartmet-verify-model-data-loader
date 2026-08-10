@@ -2,7 +2,7 @@
 name = "smartmet-verify-model-data-loader"
 version = "0.1.0"
 description = "Daemon that fetches forecast data from SmartMet Server OGC EDR API and loads it into SmartMet Verify"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "psycopg2-binary==2.9.12",
     "requests==2.33.1",
